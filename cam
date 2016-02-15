@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+#
+# This file is part of camd.
+#
+# camd is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# camd is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with camd.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Daemon process for managing one of the cameras"""
+
+# pylint: disable=invalid-name
+
+import json
+import os
+import sys
+import time
+import Pyro4
+
+PYRO_COMM_TIMEOUT = 5
+
+CAM_HOST = '192.168.0.101'
+CAM_PORT = 9010
+CAM_NAME = 'cam_daemon'
+
+CAM_URI = 'PYRO:' + CAM_NAME + '@' + CAM_HOST + ':' + str(CAM_PORT)
+SCRIPT_NAME = os.path.basename(sys.argv[0])
+sys.excepthook = Pyro4.util.excepthook
+
+# This should be kept in sync with the class in camd
+STATUS_CODES = {
+    # General error codes
+    1: 'error: command failed',
+    2: 'error: another command is already running',
+
+    # Command-specific codes
+    10: 'error: camera has not been initialized',
+    14: 'error: camera has already been initialized',
+
+    # cam specific codes
+    -100: 'error: terminated by user',
+    -101: 'error: unable to communicate with camera daemon',
+}
+
+CAMERA_STATE_DESCRIPTIONS = {
+    0: '\033[1m\033[91mOFFLINE\033[0m',
+    1: '\033[1mREADY TO OBSERVE\033[0m',
+    2: '\033[1m\033[92mEXPOSING\033[0m',
+    3: '\033[1m\033[92mREADING\033[0m'
+}
+
+
+def run_command(command):
+    """Prints the message associated with a status code and returns the code"""
+    try:
+        ret = command()
+    except KeyboardInterrupt:
+        # ctrl-c terminates the running command
+        ret = stop()
+
+        # Report successful stop
+        if ret == 0:
+            ret = -100
+    except Pyro4.errors.CommunicationError:
+        ret = -101
+
+    # Print message associated with error codes, except for -1 (error handled locally)
+    if ret in STATUS_CODES:
+        print(STATUS_CODES[ret])
+    elif ret != -1 and ret != 0:
+        print('Returned unknown status code: {0}'.format(ret))
+    sys.exit(ret)
+
+def status():
+    """Reports the current camera status"""
+    with Pyro4.Proxy(CAM_URI) as camd:
+        data = camd.report_status()
+
+    state_desc = '\033[1m\033[93mUNKNOWN\033[0m'
+    if data['state'] in CAMERA_STATE_DESCRIPTIONS:
+        state_desc = CAMERA_STATE_DESCRIPTIONS[data['state']]
+
+    # Camera is disabled
+    if data['state'] == 0:
+        print('   Camera is {}'.format(state_desc))
+        return 0
+
+    print('   Camera is {}'.format(state_desc))
+    print(json.dumps(data))
+    return 0
+
+def set_temperature(args):
+    """Set the camera temperature"""
+    if len(args) == 1:
+        temp = int(args[0])
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_temperature(temp, True)
+
+def stop_cooler():
+    """Turns off active cooling"""
+    with Pyro4.Proxy(CAM_URI) as camd:
+        return camd.set_temperature(-30, False)
+
+def stop():
+    """Stops any active camera exposures"""
+    with Pyro4.Proxy(CAM_URI) as camd:
+        return camd.stop()
+
+def initialize():
+    """Enables the camera driver"""
+    with Pyro4.Proxy(CAM_URI) as camd:
+        return camd.initialize()
+
+def shutdown():
+    """Disables the camera drivers"""
+    with Pyro4.Proxy(CAM_URI) as camd:
+        return camd.shutdown()
+
+def reboot():
+    """Reboots the camera driver"""
+    shutdown()
+    time.sleep(5)
+    return initialize()
+
+def print_usage():
+    """Prints the utility help"""
+    print('usage: {} <command> [<args>]'.format(SCRIPT_NAME))
+    print()
+    print('general commands:')
+    print('   status    print a human-readable summary of the camera status')
+    print()
+    print('engineering commands:')
+    print('   init      initialize the camera driver')
+    print('   kill      disconnect from camera driver')
+    print('   reboot    kill and reinitialize the camera driver')
+    print()
+
+    return 0
+
+if __name__ == '__main__':
+    Pyro4.config.COMMTIMEOUT = PYRO_COMM_TIMEOUT
+    if len(sys.argv) == 1:
+        sys.exit(print_usage())
+
+    if sys.argv[1] == 'cooleroff':
+        run_command(stop_cooler)
+    if sys.argv[1] == 'temperature':
+        run_command(lambda: set_temperature(sys.argv[2:]))
+    if sys.argv[1] == 'status':
+        run_command(status)
+    if sys.argv[1] == 'stop':
+        run_command(stop)
+    if sys.argv[1] == 'init':
+        run_command(initialize)
+    if sys.argv[1] == 'kill':
+        run_command(shutdown)
+    if sys.argv[1] == 'reboot':
+        run_command(reboot)
+
+    # Command not found
+    sys.exit(print_usage())
