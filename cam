@@ -35,6 +35,11 @@ CAM_URI = 'PYRO:' + CAM_NAME + '@' + CAM_HOST + ':' + str(CAM_PORT)
 SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook
 
+FMT_GREEN = '\033[92m'
+FMT_RED = '\033[91m'
+FMT_BOLD = '\033[1m'
+FMT_CLEAR = '\033[0m'
+
 # This should be kept in sync with the class in camd
 STATUS_CODES = {
     # General error codes
@@ -52,7 +57,7 @@ STATUS_CODES = {
 
 CAMERA_STATE_DESCRIPTIONS = {
     0: '\033[1m\033[91mOFFLINE\033[0m',
-    1: '\033[1mREADY TO OBSERVE\033[0m',
+    1: '\033[1mIDLE\033[0m',
     2: '\033[1m\033[92mEXPOSING\033[0m',
     3: '\033[1m\033[92mREADING\033[0m'
 }
@@ -89,12 +94,25 @@ def status():
         state_desc = CAMERA_STATE_DESCRIPTIONS[data['state']]
 
     # Camera is disabled
+    print('   Camera is {}'.format(state_desc))
     if data['state'] == 0:
-        print('   Camera is {}'.format(state_desc))
         return 0
 
-    print('   Camera is {}'.format(state_desc))
-    print(json.dumps(data))
+    temperature_status = ''
+    temperature_fmt = FMT_BOLD + FMT_RED
+    if data['temperature_locked']:
+        temperature_status = FMT_BOLD + FMT_GREEN + 'LOCKED' + FMT_CLEAR
+        temperature_fmt = FMT_BOLD + FMT_GREEN
+    elif not data['cooler_enabled']:
+        temperature_status = FMT_BOLD + FMT_RED + 'COOLING DISABLED' + FMT_CLEAR
+        temperature_fmt = FMT_BOLD
+    else:
+        temperature_status = FMT_BOLD + 'LOCKING ON {:.0f}\u00B0C'.format(data['target_temperature']) \
+            + FMT_CLEAR
+
+    print('   Temperature is ' + temperature_fmt + '{:.0f}'.format(data['temperature']) + \
+          '\u00B0C' + FMT_CLEAR + ' (' + temperature_status + ')')
+
     return 0
 
 def set_temperature(args):
@@ -102,12 +120,12 @@ def set_temperature(args):
     if len(args) == 1:
         temp = int(args[0])
         with Pyro4.Proxy(CAM_URI) as camd:
-            return camd.set_temperature(temp, True)
+            return camd.set_target_temperature(temp, True)
 
 def stop_cooler():
     """Turns off active cooling"""
     with Pyro4.Proxy(CAM_URI) as camd:
-        return camd.set_temperature(-30, False)
+        return camd.enable_cooler(False)
 
 def stop():
     """Stops any active camera exposures"""
@@ -135,12 +153,14 @@ def print_usage():
     print('usage: {} <command> [<args>]'.format(SCRIPT_NAME))
     print()
     print('general commands:')
-    print('   status    print a human-readable summary of the camera status')
+    print('   status       print a human-readable summary of the camera status')
+    print('   temperature  set target temperature and enable cooling')
+    print('   cooleroff    disable cooling')
     print()
     print('engineering commands:')
-    print('   init      initialize the camera driver')
-    print('   kill      disconnect from camera driver')
-    print('   reboot    kill and reinitialize the camera driver')
+    print('   init         initialize the camera driver')
+    print('   kill         disconnect from camera driver')
+    print('   reboot       kill and reinitialize the camera driver')
     print()
 
     return 0
