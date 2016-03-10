@@ -51,6 +51,8 @@ class CommandStatus:
     CameraNotInitialized = 10
     CameraNotUninitialized = 14
 
+    TemperatureOutsideLimits = 20
+
 class CameraStatus:
     """Status of the camera hardware"""
     Disabled, Idle, Exposing, Reading = range(4)
@@ -93,6 +95,9 @@ class CameraDaemon:
         self._temperature_locked = False
         self._cooler_enabled = False
         self._target_temperature = -30
+
+        self._min_temperature = 0
+        self._max_temperature = 0
 
         status_thread = threading.Thread(target=self.__poll_camera_status)
         status_thread.daemon = True
@@ -144,6 +149,9 @@ class CameraDaemon:
 
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
+
+            if temperature < self._min_temperature or temperature > self._max_temperature:
+                return CommandStatus.TemperatureOutsideLimits
 
             if enable_cooler is None:
                 enable_cooler = self.enable_cooler
@@ -217,8 +225,17 @@ class CameraDaemon:
                 print('failed to initialize camera with status {}'.format(status))
                 return CommandStatus.Failed
 
+            min_temp = c_int(self._min_temperature)
+            max_temp = c_int(self._max_temperature)
+            status = driver.GetTemperatureRange(byref(min_temp), byref(max_temp))
+            if status != AndorStatus.Success:
+                print('failed to query camera temperature limits with status {}'.format(status))
+                return CommandStatus.Failed
+
             with self._driver_lock:
                 self._driver = driver
+                self._min_temperature = min_temp.value
+                self._max_temperature = max_temp.value
 
             return CommandStatus.Succeeded
 

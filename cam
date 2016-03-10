@@ -49,6 +49,7 @@ STATUS_CODES = {
     # Command-specific codes
     10: 'error: camera has not been initialized',
     14: 'error: camera has already been initialized',
+    20: 'error: requested temperature is outside the supported limits',
 
     # cam specific codes
     -100: 'error: terminated by user',
