@@ -19,7 +19,6 @@
 
 # pylint: disable=invalid-name
 
-import json
 import os
 import sys
 import time
@@ -48,8 +47,20 @@ STATUS_CODES = {
 
     # Command-specific codes
     10: 'error: camera has not been initialized',
+    11: 'error: camera is already exposing',
     14: 'error: camera has already been initialized',
     20: 'error: requested temperature is outside the supported limits',
+
+    # Readout geometry
+    30: 'error: invalid horizontal binning',
+    31: 'error: invalid vertical binning',
+    32: 'error: invalid readout start x',
+    33: 'error: invalid readout start x',
+    34: 'error: invalid readout width',
+    35: 'error: invalid readout height',
+
+    40: 'error: invalid gain',
+    41: 'error: invalid shift speed',
 
     # cam specific codes
     -100: 'error: terminated by user',
@@ -63,6 +74,11 @@ CAMERA_STATE_DESCRIPTIONS = {
     3: '\033[1m\033[92mREADING\033[0m'
 }
 
+GAIN_DESCRIPTIONS = {
+    0: '\033[1mHIGH\033[0m',
+    1: '\033[1mMEDIUM\033[0m',
+    2: '\033[1mLOW\033[0m',
+}
 
 def run_command(command):
     """Prints the message associated with a status code and returns the code"""
@@ -108,11 +124,22 @@ def status():
         temperature_status = FMT_BOLD + FMT_RED + 'COOLING DISABLED' + FMT_CLEAR
         temperature_fmt = FMT_BOLD
     else:
-        temperature_status = FMT_BOLD + 'LOCKING ON {:.0f}\u00B0C'.format(data['target_temperature']) \
-            + FMT_CLEAR
+        temperature_status = FMT_BOLD + 'LOCKING ON {:.0f}\u00B0C'.format(
+            data['target_temperature']) + FMT_CLEAR
 
     print('   Temperature is ' + temperature_fmt + '{:.0f}'.format(data['temperature']) + \
           '\u00B0C' + FMT_CLEAR + ' (' + temperature_status + ')')
+
+    shutter_mode = FMT_GREEN + 'AUTO' if data['shutter_enabled'] else FMT_RED + 'DARK'
+    print('   Shutter mode is ' + FMT_BOLD + shutter_mode + FMT_CLEAR)
+    print('   Pre-amp gain is ' + GAIN_DESCRIPTIONS[data['gain_index']] + FMT_CLEAR)
+    print('   Readout speed is ' + FMT_BOLD + '{:.2f} MHz'.format(
+        data['horizontal_shift_speed_mhz']) + FMT_CLEAR)
+    print('   Reading {6}({0}, {1}, {2}, {3}){7} px from {6}{4}x{5}{7} binned detector'.format(
+        data['geometry_x'], data['geometry_y'], data['geometry_width'], data['geometry_height'],
+        data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
+
+    print('   Exposure time is ' + FMT_BOLD + '{:.2f}s'.format(data['exposure_time']) + FMT_CLEAR)
 
     return 0
 
@@ -122,11 +149,65 @@ def set_temperature(args):
         temp = int(args[0])
         with Pyro4.Proxy(CAM_URI) as camd:
             return camd.set_target_temperature(temp, True)
+    print('usage: {} temperature <degrees>'.format(SCRIPT_NAME))
+    return -1
 
 def stop_cooler():
     """Turns off active cooling"""
     with Pyro4.Proxy(CAM_URI) as camd:
         return camd.enable_cooler(False)
+
+def set_exposure(args):
+    """Set the camera exposure time"""
+    if len(args) == 1:
+        exposure = float(args[0])
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_exposure(exposure)
+    print('usage: {} exposure <seconds>'.format(SCRIPT_NAME))
+    return -1
+
+def set_gain(args):
+    """Set the camera gain"""
+    if len(args) == 1 and (args[0] == 'high' or args[0] == 'medium' or args[0] == 'low'):
+        index = 0 if args[0] == 'high' else 1 if args[0] == 'medium' else 2
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_gain(index)
+    print('usage: {} gain [high|medium|low]'.format(SCRIPT_NAME))
+    return -1
+
+def set_horizontal_shift_speed(args):
+    """Set the readout / horizontal shift speed"""
+    options = ['a', 'b', 'c', 'd']
+    if len(args) == 1 and args[0] in options:
+        index = options.index(args[0])
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_horizontal_shift(index)
+    print('usage: {} readout [a|b|c|d]'.format(SCRIPT_NAME))
+    return -1
+
+def set_shutter(args):
+    """Set the camera shutter mode"""
+    if len(args) == 1 and (args[0] == 'auto' or args[0] == 'dark'):
+        enabled = args[0] == 'auto'
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_shutter(enabled)
+    print('usage: {} shutter [auto|dark]'.format(SCRIPT_NAME))
+    return -1
+
+def set_geometry(args):
+    """Set the camera binning and window"""
+    if len(args) == 6:
+        bin_x = int(args[0])
+        bin_y = int(args[1])
+        x = int(args[2])
+        y = int(args[3])
+        width = int(args[4])
+        height = int(args[5])
+
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_geometry(bin_x, bin_y, x, y, width, height)
+    print('usage: {} geometry <bin_x> <bin_y> <x> <y> <width> <height>'.format(SCRIPT_NAME))
+    return -1
 
 def stop():
     """Stops any active camera exposures"""
@@ -156,6 +237,11 @@ def print_usage():
     print('general commands:')
     print('   status       print a human-readable summary of the camera status')
     print('   temperature  set target temperature and enable cooling')
+    print('   exposure     set exposure time in seconds')
+    print('   shutter      set shutter mode')
+    print('   gain         set gain mode')
+    print('   readout      set readout speed')
+    print('   geometry     set readout binning and window')
     print('   cooleroff    disable cooling')
     print()
     print('engineering commands:')
@@ -175,6 +261,16 @@ if __name__ == '__main__':
         run_command(stop_cooler)
     if sys.argv[1] == 'temperature':
         run_command(lambda: set_temperature(sys.argv[2:]))
+    if sys.argv[1] == 'exposure':
+        run_command(lambda: set_exposure(sys.argv[2:]))
+    if sys.argv[1] == 'shutter':
+        run_command(lambda: set_shutter(sys.argv[2:]))
+    if sys.argv[1] == 'gain':
+        run_command(lambda: set_gain(sys.argv[2:]))
+    if sys.argv[1] == 'readout':
+        run_command(lambda: set_horizontal_shift_speed(sys.argv[2:]))
+    if sys.argv[1] == 'geometry':
+        run_command(lambda: set_geometry(sys.argv[2:]))
     if sys.argv[1] == 'status':
         run_command(status)
     if sys.argv[1] == 'stop':
