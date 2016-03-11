@@ -64,7 +64,7 @@ class CommandStatus:
 
 class CameraStatus:
     """Status of the camera hardware"""
-    Disabled, Idle, Exposing, Reading = range(4)
+    Disabled, Initializing, Idle, Acquiring, Aborting = range(5)
 
 class AndorStatus:
     """Status codes returned by libandor"""
@@ -250,6 +250,10 @@ class CameraDaemon:
             })
         return data
 
+    # pylint: disable=too-many-return-statements
+    # pylint: disable=too-many-branches
+    # pylint: disable=too-many-statements
+    # pylint: disable=too-many-locals
     @Pyro4.expose
     def initialize(self):
         """Connects to the camera driver"""
@@ -260,117 +264,130 @@ class CameraDaemon:
             if self._status != CameraStatus.Disabled:
                 return CommandStatus.CameraNotUninitialized
 
+            self._status = CameraStatus.Initializing
             print('initializing driver')
             driver = CDLL('libandor.so')
-            num_cameras = c_int32()
-            status = driver.GetAvailableCameras(byref(num_cameras))
-            if status != AndorStatus.Success or num_cameras.value == 0:
-                return CommandStatus.CameraNotFound
+            try:
+                num_cameras = c_int32()
+                status = driver.GetAvailableCameras(byref(num_cameras))
+                if status != AndorStatus.Success or num_cameras.value == 0:
+                    return CommandStatus.CameraNotFound
 
-            print('{} cameras available'.format(num_cameras.value))
-            print('using first camera')
+                print('{} cameras available'.format(num_cameras.value))
+                print('using first camera')
 
-            handle = c_int32()
-            status = driver.GetCameraHandle(c_int32(0), byref(handle))
-            if status != AndorStatus.Success:
-                print('failed to query camera handle with status {}'.format(status))
-                return CommandStatus.Failed
-
-            status = driver.SetCurrentCamera(handle)
-            if status != AndorStatus.Success:
-                print('failed to set current camera with status {}'.format(status))
-                return CommandStatus.Failed
-
-            status = driver.Initialize('/usr/local/etc/andor'.encode('ascii'))
-            if status != AndorStatus.Success:
-                print('failed to initialize camera with status {}'.format(status))
-                return CommandStatus.Failed
-
-            # Query cooler temperature limits
-            min_temp = c_int(self._min_temperature)
-            max_temp = c_int(self._max_temperature)
-            status = driver.GetTemperatureRange(byref(min_temp), byref(max_temp))
-            if status != AndorStatus.Success:
-                print('failed to query camera temperature limits with status {}'.format(status))
-                return CommandStatus.Failed
-
-            # Query detector size
-            width = c_int(self._ccd_width)
-            height = c_int(self._ccd_height)
-            status = driver.GetDetector(byref(width), byref(height))
-            if status != AndorStatus.Success:
-                print('failed to query detector size with status {}'.format(status))
-                return CommandStatus.Failed
-
-            # Set default shutter
-            shutter = c_int(0 if self._shutter_enabled else 2)
-            status = driver.SetShutter(c_int(1), shutter, c_int(50), c_int(50))
-            if status != AndorStatus.Success:
-                print('failed to set shutter closed with status {}'.format(status))
-                return CommandStatus.Failed
-
-            # Configure standard 2D image readout
-            status = driver.SetReadMode(c_int(4))
-            if status != AndorStatus.Success:
-                print('failed to set image readout mode with status {}'.format(status))
-                return CommandStatus.Failed
-
-            # Set default readout geometry
-            status = driver.SetImage(c_int(self._geometry_bin_x), c_int(self._geometry_bin_y),
-                                     c_int(self._geometry_x), c_int(self._geometry_y),
-                                     c_int(width.value), c_int(height.value))
-            if status != AndorStatus.Success:
-                print('failed to set default readout geometry with status {}'.format(status))
-                return CommandStatus.Failed
-
-            # Set default exposure time
-            status = driver.SetExposureTime(c_float(self._exposure_time))
-            if status != AndorStatus.Success:
-                print('failed to set default exposure time with status {}'.format(status))
-                return CommandStatus.Failed
-
-            # Set default gain index
-            status = driver.SetPreAmpGain(c_int(self._gain_index))
-            if status != AndorStatus.Success:
-                print('failed to set default gain index with status {}'.format(status))
-                return CommandStatus.Failed
-
-            # Query horizontal shift speeds
-            # Assumes that there is only one readout channel, and no electron multiplication
-            shift_count = c_int(0)
-            status = driver.GetNumberHSSpeeds(c_int(0), c_int(0), byref(shift_count))
-            if status != AndorStatus.Success:
-                print('failed to query horizontal shift speed count with status {}'.format(status))
-                return CommandStatus.Failed
-
-            speeds = []
-            speed = c_float(0)
-            for i in range(shift_count.value):
-                status = driver.GetHSSpeed(c_int(0), c_int(0), c_int(i), byref(speed))
+                handle = c_int32()
+                status = driver.GetCameraHandle(c_int32(0), byref(handle))
                 if status != AndorStatus.Success:
-                    print('failed to query horizontal shift speed for index ' + \
-                        '{} with status {}'.format(i, status))
+                    print('failed to query camera handle with status {}'.format(status))
                     return CommandStatus.Failed
-                speeds.append(speed.value)
 
-            # Set default horizontal shift index
-            status = driver.SetHSSpeed(c_int(self._horizontal_shift_speed_index))
-            if status != AndorStatus.Success:
-                print('failed to set default horizontal shift speed index with status {}'.format(
-                    status))
-                return CommandStatus.Failed
+                status = driver.SetCurrentCamera(handle)
+                if status != AndorStatus.Success:
+                    print('failed to set current camera with status {}'.format(status))
+                    return CommandStatus.Failed
 
-            with self._driver_lock:
-                self._driver = driver
-                self._min_temperature = min_temp.value
-                self._max_temperature = max_temp.value
-                self._ccd_width = width.value
-                self._ccd_height = height.value
-                self._geometry_width = self._ccd_width
-                self._geometry_height = self._ccd_height
-                self._horizontal_shift_speeds = speeds
+                status = driver.Initialize('/usr/local/etc/andor'.encode('ascii'))
+                if status != AndorStatus.Success:
+                    print('failed to initialize camera with status {}'.format(status))
+                    return CommandStatus.Failed
 
-            return CommandStatus.Succeeded
+                # Query cooler temperature limits
+                min_temp = c_int(self._min_temperature)
+                max_temp = c_int(self._max_temperature)
+                status = driver.GetTemperatureRange(byref(min_temp), byref(max_temp))
+                if status != AndorStatus.Success:
+                    print('failed to query camera temperature limits with status ' + str(status))
+                    return CommandStatus.Failed
+
+                # Query detector size
+                width = c_int(self._ccd_width)
+                height = c_int(self._ccd_height)
+                status = driver.GetDetector(byref(width), byref(height))
+                if status != AndorStatus.Success:
+                    print('failed to query detector size with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                # Set default shutter
+                shutter = c_int(0 if self._shutter_enabled else 2)
+                status = driver.SetShutter(c_int(1), shutter, c_int(50), c_int(50))
+                if status != AndorStatus.Success:
+                    print('failed to set shutter closed with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                # Configure standard 2D image readout
+                status = driver.SetReadMode(c_int(4))
+                if status != AndorStatus.Success:
+                    print('failed to set image readout mode with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                # Set default readout geometry
+                status = driver.SetImage(c_int(self._geometry_bin_x), c_int(self._geometry_bin_y),
+                                         c_int(self._geometry_x), c_int(self._geometry_y),
+                                         c_int(width.value), c_int(height.value))
+                if status != AndorStatus.Success:
+                    print('failed to set default readout geometry with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                # Set default exposure time
+                status = driver.SetExposureTime(c_float(self._exposure_time))
+                if status != AndorStatus.Success:
+                    print('failed to set default exposure time with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                # Set default gain index
+                status = driver.SetPreAmpGain(c_int(self._gain_index))
+                if status != AndorStatus.Success:
+                    print('failed to set default gain index with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                # Query horizontal shift speeds
+                # Assumes that there is only one readout channel, and no electron multiplication
+                shift_count = c_int(0)
+                status = driver.GetNumberHSSpeeds(c_int(0), c_int(0), byref(shift_count))
+                if status != AndorStatus.Success:
+                    print('failed to query horizontal shift speed count with status ' + \
+                          str(status))
+                    return CommandStatus.Failed
+
+                speeds = []
+                speed = c_float(0)
+                for i in range(shift_count.value):
+                    status = driver.GetHSSpeed(c_int(0), c_int(0), c_int(i), byref(speed))
+                    if status != AndorStatus.Success:
+                        print('failed to query horizontal shift speed for index ' + \
+                            '{} with status {}'.format(i, status))
+                        return CommandStatus.Failed
+                    speeds.append(speed.value)
+
+                # Set default horizontal shift index
+                status = driver.SetHSSpeed(c_int(self._horizontal_shift_speed_index))
+                if status != AndorStatus.Success:
+                    print('failed to set default horizontal shift speed index with status ' + \
+                          str(status))
+                    return CommandStatus.Failed
+
+                with self._driver_lock:
+                    self._driver = driver
+                    self._min_temperature = min_temp.value
+                    self._max_temperature = max_temp.value
+                    self._ccd_width = width.value
+                    self._ccd_height = height.value
+                    self._geometry_width = self._ccd_width
+                    self._geometry_height = self._ccd_height
+                    self._horizontal_shift_speeds = speeds
+                    self._status = CameraStatus.Idle
+
+                return CommandStatus.Succeeded
+            finally:
+                # Clean up on failure
+                if self._status != CameraStatus.Idle:
+                    driver.ShutDown()
+                    self._status = CameraStatus.Disabled
+    # pylint: enable=too-many-return-statements
+    # pylint: enable=too-many-branches
+    # pylint: enable=too-many-statements
+    # pylint: enable=too-many-locals
 
     @Pyro4.expose
     def set_shutter(self, enabled):
