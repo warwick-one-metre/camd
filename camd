@@ -23,9 +23,13 @@
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=no-self-use
 
-from ctypes import c_float, c_int32, c_int, byref, create_string_buffer, CDLL
+from ctypes import c_float, c_int32, c_int, c_uint16, c_long, byref, create_string_buffer, CDLL
+import datetime
+import queue
 import threading
 import time
+from astropy.io import fits
+import numpy
 import Pyro4
 
 PYRO_COMM_TIMEOUT = 5
@@ -36,6 +40,9 @@ CAMD_NAME = 'cam_daemon'
 
 # Delay between camera state queries (in seconds)
 STATUS_QUERY_DELAY = 1
+
+# Delay between frame save polls (in seconds)
+SAVE_POLL_DELAY = 1
 
 # This should be kept in sync with the dictionary in cam
 class CommandStatus:
@@ -49,8 +56,9 @@ class CommandStatus:
 
     # Command-specific codes
     CameraNotInitialized = 10
-    CameraAlreadyExposing = 11
+    CameraNotIdle = 11
     CameraNotUninitialized = 14
+    CameraNotAcquiring = 15
 
     TemperatureOutsideLimits = 20
     InvalidHorizontalBinning = 30
@@ -125,11 +133,11 @@ class CameraDaemon:
         self._ccd_width = 0
         self._ccd_height = 0
 
-        # Readout geometry: width and height loaded during init
-        self._geometry_bin_x = 1
-        self._geometry_bin_y = 1
-        self._geometry_x = 1
-        self._geometry_y = 1
+        # Readout geometry: defaults loaded during init
+        self._geometry_bin_x = 0
+        self._geometry_bin_y = 0
+        self._geometry_x = 0
+        self._geometry_y = 0
         self._geometry_width = 0
         self._geometry_height = 0
 
@@ -139,7 +147,7 @@ class CameraDaemon:
         # Gain index. For blue camera: 0 = 1x, 1 = 2x, 2 = 4x
         self._gains = []
         self._gain_index = 0
-        self._exposure_time = 10
+        self._exposure_time = 1
 
         # Horizontal shift speeds in MHz: loaded during init
         self._horizontal_shift_speeds = []
@@ -152,6 +160,23 @@ class CameraDaemon:
         # Number of frames acquired this sequence
         self._sequence_frame_count = 0
 
+        # Thread that runs the exposure sequence
+        # Initialized by start() method
+        self._acquisition_thread = None
+
+        # Signal that the exposure sequence should be terminated
+        # at end of the current frame
+        self._stop_acquisition = False
+
+        # Queue of captured frames waiting to be saved to disk by the status thread
+        self._acquisition_queue = queue.Queue()
+
+        # Thread for saving acquired frames to disk
+        save_thread = threading.Thread(target=self.__poll_acquired_frames)
+        save_thread.daemon = True
+        save_thread.start()
+
+        # Thread for polling camera status
         status_thread = threading.Thread(target=self.__poll_camera_status)
         status_thread.daemon = True
         status_thread.start()
@@ -159,11 +184,9 @@ class CameraDaemon:
     def __poll_camera_status(self):
         """Background thread that polls the camera status"""
         while True:
+            # Query temperature
             with self._driver_lock:
                 if self._driver is not None:
-                    # TODO: set this properly
-                    self._status = CameraStatus.Idle
-
                     # Query temperature status
                     temp = c_float()
                     status = self._driver.GetTemperatureF(byref(temp))
@@ -172,7 +195,65 @@ class CameraDaemon:
                     self._cooler_enabled = status != AndorStatus.TemperatureOff
                 else:
                     self._status = CameraStatus.Disabled
+
             time.sleep(STATUS_QUERY_DELAY)
+
+    def __poll_acquired_frames(self):
+        """Background thread that polls the acquisition queue and saves frames to disk"""
+        while True:
+            # Save any acquired frames to disk
+            while not self._acquisition_queue.empty():
+                try:
+                    frame = self._acquisition_queue.get()
+                    shape = (self._geometry_height // self._geometry_bin_y,
+                             self._geometry_width // self._geometry_bin_x)
+                    data = numpy.frombuffer(frame[0], dtype=numpy.uint16).reshape(shape)
+                    hdu = fits.PrimaryHDU(data)
+
+                    # Build list of header keys
+                    header = [
+                        (None, None, None),
+                        ('COMMENT', ' ---                DATE/TIME                --- ', ''),
+                        ('DATE-OBS', frame[1].strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
+                         'date that exposure was triggered (UTC)'),
+                        ('DATE-END', frame[2].strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
+                         'date that data was received by PC (UTC)'),
+                        ('EXPTIME', float(self._exposure_time), 'exposure time (seconds)'),
+                        ('TIME-SRC', 'NTP', 'times are measured using NTP-synced PC clock'),
+                    ]
+
+                    header.extend(self.__camera_frame_headers())
+
+                    # Using Card and append() to force comment cards to be placed inline
+                    for h in header:
+                        hdu.header.append(fits.Card(h[0], h[1], h[2]), end=True)
+
+                    hdu.writeto('test.fits.gz', clobber=True)
+                    print('saved test.fits.gz')
+                except Exception as e:
+                    print('save thread: swallowing error ' + str(e))
+            time.sleep(SAVE_POLL_DELAY)
+
+    def __camera_frame_headers(self):
+        """Returns a dictionary of the camera-related fits frame headers"""
+        rspd = self._horizontal_shift_speeds[self._horizontal_shift_speed_index]
+        return [
+            (None, None, None),
+            ('COMMENT', ' ---           CAMERA INFORMATION            --- ', ''),
+            ('CAMERA', self._camera_model + ' ({})'.format(self._camera_serial),
+             'camera model and serial number'),
+            ('CCD-TEMP', round(self._temperature, 2), 'CCD temperature (C)'),
+            ('CCD-TSET', self._target_temperature, 'CCD temperature set point (C)'),
+            ('CCD-TLCK', self._temperature_locked, 'CCD temperature is locked to set point'),
+            ('CCD-XBIN', self._geometry_bin_x, 'x binning (pixels)'),
+            ('CCD-YBIN', self._geometry_bin_y, 'y binning (pixels)'),
+            ('CCD-WIND', '[{}:{},{}:{}]'.format(
+                self._geometry_x, self._geometry_x + self._geometry_width - 1,
+                self._geometry_y, self._geometry_y + self._geometry_height - 1),
+             'readout window (unbinned pixels: [x1:x2,y1:y2])'),
+            ('CCD-GAIN', self._gains[self._gain_index], 'nominal readout gain (e / ADU)'),
+            ('CCD-RSPD', rspd, 'readout speed (MHz)'),
+        ]
 
     def __set_target_temperature_and_cooler(self, target_temperature, cooler_enabled):
         """Set the camera temperature and cooler configuration"""
@@ -191,6 +272,48 @@ class CameraDaemon:
                 status = self._driver.CoolerOFF()
 
             return status == AndorStatus.Success
+
+    def __run_exposure_sequence(self):
+        """Worker thread that acquires frames and their times.
+           Tagged frames are pushed to the acquisition queue
+           for further processing on another thread"""
+        try:
+            pixel_count = (self._geometry_width // self._geometry_bin_x) * \
+                          (self._geometry_height // self._geometry_bin_y)
+            while not self._stop_acquisition:
+                framedata = bytearray(pixel_count * 2)
+
+                with self._driver_lock:
+                    start_time = datetime.datetime.utcnow()
+                    status = self._driver.StartAcquisition()
+                if status != AndorStatus.Success:
+                    print('exposure sequence: failed to start acquisition with status ' + \
+                          str(status))
+                    break
+
+                # TODO: thread safety: do we need the driver lock?
+                status = self._driver.WaitForAcquisition()
+                if status != AndorStatus.Success:
+                    print('exposure sequence: waiting failed with status ' + str(status))
+                    break
+
+                end_time = datetime.datetime.utcnow()
+                cdata = (c_uint16 * pixel_count).from_buffer(framedata)
+                status = self._driver.GetAcquiredData16(byref(cdata), c_long(pixel_count))
+                if status != AndorStatus.Success:
+                    print('exposure sequence: failed to get acquired data with status ' + \
+                          str(status))
+                    break
+
+                self._sequence_frame_count += 1
+                self._acquisition_queue.put((framedata, start_time, end_time))
+
+                # Set exposure count completed
+                if self._sequence_frame_limit > 0 and \
+                        self._sequence_frame_count >= self._sequence_frame_limit:
+                    self._stop_acquisition = True
+        finally:
+            self._status = CameraStatus.Idle
 
     @Pyro4.expose
     def set_target_temperature(self, temperature, enable_cooler=None):
@@ -342,12 +465,11 @@ class CameraDaemon:
                     print('failed to set image readout mode with status {}'.format(status))
                     return CommandStatus.Failed
 
-                # Set default readout geometry
-                status = driver.SetImage(c_int(self._geometry_bin_x), c_int(self._geometry_bin_y),
-                                         c_int(self._geometry_x), c_int(self._geometry_y),
-                                         c_int(width.value), c_int(height.value))
+                # Camera does not support hardware timing, so we are forced to do individual
+                # exposures via software
+                status = driver.SetAcquisitionMode(c_int(1))
                 if status != AndorStatus.Success:
-                    print('failed to set default readout geometry with status {}'.format(status))
+                    print('failed to set acquisition mode with status {}'.format(status))
                     return CommandStatus.Failed
 
                 # Set default exposure time
@@ -404,6 +526,14 @@ class CameraDaemon:
                           str(status))
                     return CommandStatus.Failed
 
+                # Set default readout geometry
+                status = driver.SetImage(c_int(1), c_int(1),
+                                         c_int(1), c_int(width.value),
+                                         c_int(1), c_int(height.value))
+                if status != AndorStatus.Success:
+                    print('failed to set default readout geometry with status {}'.format(status))
+                    return CommandStatus.Failed
+
                 with self._driver_lock:
                     self._driver = driver
                     self._camera_model = model.value.decode('ascii')
@@ -412,6 +542,10 @@ class CameraDaemon:
                     self._max_temperature = max_temp.value
                     self._ccd_width = width.value
                     self._ccd_height = height.value
+                    self._geometry_bin_x = 1
+                    self._geometry_bin_y = 1
+                    self._geometry_x = 1
+                    self._geometry_y = 1
                     self._geometry_width = self._ccd_width
                     self._geometry_height = self._ccd_height
                     self._gains = gains
@@ -439,8 +573,8 @@ class CameraDaemon:
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
 
-            if self._status > CameraStatus.Idle:
-                return CommandStatus.CameraAlreadyExposing
+            if self._status != CameraStatus.Idle:
+                return CommandStatus.CameraNotIdle
 
             with self._driver_lock:
                 value = c_int(0 if enabled else 2)
@@ -463,8 +597,8 @@ class CameraDaemon:
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
 
-            if self._status > CameraStatus.Idle:
-                return CommandStatus.CameraAlreadyExposing
+            if self._status != CameraStatus.Idle:
+                return CommandStatus.CameraNotIdle
 
             with self._driver_lock:
                 status = self._driver.SetPreAmpGain(c_int(gain_index))
@@ -487,8 +621,8 @@ class CameraDaemon:
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
 
-            if self._status > CameraStatus.Idle:
-                return CommandStatus.CameraAlreadyExposing
+            if self._status != CameraStatus.Idle:
+                return CommandStatus.CameraNotIdle
 
             with self._driver_lock:
                 status = self._driver.SetHSSpeed(c_int(0), c_int(shift_speed_index))
@@ -512,8 +646,8 @@ class CameraDaemon:
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
 
-            if self._status > CameraStatus.Idle:
-                return CommandStatus.CameraAlreadyExposing
+            if self._status != CameraStatus.Idle:
+                return CommandStatus.CameraNotIdle
 
             with self._driver_lock:
                 status = self._driver.SetExposureTime(c_float(seconds))
@@ -535,8 +669,8 @@ class CameraDaemon:
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
 
-            if self._status > CameraStatus.Idle:
-                return CommandStatus.CameraAlreadyExposing
+            if self._status != CameraStatus.Idle:
+                return CommandStatus.CameraNotIdle
 
             with self._driver_lock:
                 status = self._driver.SetImage(c_int(bin_x), c_int(bin_y),
@@ -578,16 +712,25 @@ class CameraDaemon:
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
 
+            # Complete the current exposure
+            if self._acquisition_thread is not None:
+                with self._driver_lock:
+                    self._driver.AbortAcquisition()
+
+                print('shutdown: waiting for acquisition to complete')
+                self._stop_acquisition = True
+                self._acquisition_thread.join()
+
             with self._driver_lock:
-                print('killing driver')
+                print('shutdown: disconnecting driver')
                 self._driver.ShutDown()
                 self._driver = None
 
             return CommandStatus.Succeeded
 
     @Pyro4.expose
-    def start(self):
-        """Starts an exposure sequence with the currently defined settings"""
+    def start_sequence(self, count):
+        """Starts an exposure sequence with a set number of frames, or 0 to run until stopped"""
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -595,29 +738,36 @@ class CameraDaemon:
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
 
-            if self._status > CameraStatus.Idle:
-                return CommandStatus.CameraAlreadyExposing
+            if self._status != CameraStatus.Idle:
+                return CommandStatus.CameraNotIdle
 
-            with self._driver_lock:
-                # Acquisition mode: single scan or run until abort
-                acquisition_mode = c_int(1 if self._sequence_frame_limit == 0 else 5)
-                status = self._driver.SetAcquisitionMode(acquisition_mode)
-                if status != AndorStatus.Success:
-                    print('failed to set acquisition mode with status {}'.format(status))
-                    return CommandStatus.Failed
+            print('starting exposure sequence')
+            self._sequence_frame_limit = count
+            self._sequence_frame_count = 0
+            self._stop_acquisition = False
+            self._acquisition_thread = threading.Thread(target=self.__run_exposure_sequence)
+            self._acquisition_thread.daemon = False
+            self._acquisition_thread.start()
+            self._status = CameraStatus.Acquiring
 
-                # TODO: Start sequence
             return CommandStatus.Succeeded
 
     @Pyro4.expose
-    def stop(self):
+    def stop_sequence(self):
         """Stops any active exposure sequence"""
         if self._status == CameraStatus.Disabled:
             return CommandStatus.CameraNotInitialized
 
+        if self._status != CameraStatus.Acquiring:
+            return CommandStatus.CameraNotAcquiring
+
+        self._status = CameraStatus.Aborting
+        print('aborting exposure sequence')
         with self._driver_lock:
-            #TODO: Stop sequence
-            self._sequence_frame_count = 0
+            self._driver.AbortAcquisition()
+
+        self._sequence_frame_count = 0
+        self._stop_acquisition = True
 
         return CommandStatus.Succeeded
 

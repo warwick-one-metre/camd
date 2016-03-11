@@ -47,8 +47,9 @@ STATUS_CODES = {
 
     # Command-specific codes
     10: 'error: camera has not been initialized',
-    11: 'error: camera is already exposing',
+    11: 'error: camera is not idle',
     14: 'error: camera has already been initialized',
+    15: 'error: camera is not acquiring',
     20: 'error: requested temperature is outside the supported limits',
 
     # Readout geometry
@@ -211,10 +212,24 @@ def set_geometry(args):
     print('usage: {} geometry <bin_x> <bin_y> <x> <y> <width> <height>'.format(SCRIPT_NAME))
     return -1
 
+def start(args):
+    """Starts an exposure sequence"""
+    if len(args) == 1:
+        try:
+            count = 0 if args[0] == 'continuous' else int(args[0])
+            if args[0] == 'continuous' or count > 0:
+                with Pyro4.Proxy(CAM_URI) as camd:
+                    return camd.start_sequence(count)
+        except:
+            print('error: invalid exposure count:', args[0])
+            return -1
+    print('usage: {} start (continuous|<count>)'.format(SCRIPT_NAME))
+    return -1
+
 def stop():
     """Stops any active camera exposures"""
     with Pyro4.Proxy(CAM_URI) as camd:
-        return camd.stop()
+        return camd.stop_sequence()
 
 def initialize():
     """Enables the camera driver"""
@@ -244,10 +259,11 @@ def print_usage():
     print('   gain         set gain mode')
     print('   readout      set readout speed')
     print('   geometry     set readout binning and window')
-    print('   cooleroff    disable cooling')
+    print('   start        start an exposure sequence')
     print()
     print('engineering commands:')
     print('   init         initialize the camera driver')
+    print('   cooleroff    disable cooling')
     print('   kill         disconnect from camera driver')
     print('   reboot       kill and reinitialize the camera driver')
     print()
@@ -275,6 +291,8 @@ if __name__ == '__main__':
         run_command(lambda: set_geometry(sys.argv[2:]))
     if sys.argv[1] == 'status':
         run_command(status)
+    if sys.argv[1] == 'start':
+        run_command(lambda: start(sys.argv[2:]))
     if sys.argv[1] == 'stop':
         run_command(stop)
     if sys.argv[1] == 'init':
