@@ -23,7 +23,7 @@
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=no-self-use
 
-from ctypes import c_float, c_int32, c_int, byref, CDLL
+from ctypes import c_float, c_int32, c_int, byref, CDLL, Structure, c_uint32
 import threading
 import time
 import Pyro4
@@ -81,6 +81,21 @@ class AndorStatus:
     DrvP4Invalid = 20069
     DrvP5Invalid = 20076
     DrvP6Invalid = 20077
+
+class AndorCapabilities(Structure):
+    _fields_ = [
+        ('ulSize', c_uint32),
+        ('ulAcqModes', c_uint32),
+        ('ulReadModes', c_uint32),
+        ('ulTriggerModes', c_uint32),
+        ('ulCameraType', c_uint32),
+        ('ulPixelMode', c_uint32),
+        ('ulSetFunctions', c_uint32),
+        ('ulGetFunctions', c_uint32),
+        ('ulFeatures', c_uint32),
+        ('ulPCICard', c_uint32),
+        ('ulEMGainCapability', c_uint32),
+        ('ulFTReadModes', c_uint32)]
 
 class TryLock(object):
     """Helper object for use with `with` statements"""
@@ -359,6 +374,16 @@ class CameraDaemon:
                 print('failed to set default horizontal shift speed index with status {}'.format(
                     status))
                 return CommandStatus.Failed
+
+            # DEBUG: query camera capabilities
+            caps = AndorCapabilities(96,1,1,1,1,1,1,1,1,1,1,1)
+            status = driver.GetCapabilities(byref(caps))
+            if status != AndorStatus.Success:
+                print('failed to get capabilities with status {}'.format(status))
+                return CommandStatus.Failed
+            print(caps.ulSize, caps.ulAcqModes, caps.ulReadModes, caps.ulTriggerModes,
+                  caps.ulCameraType, caps.ulPixelMode, caps.ulSetFunctions, caps.ulGetFunctions,
+                  caps.ulFeatures, caps.ulPCICard, caps.ulEMGainCapability, caps.ulFTReadModes)
 
             with self._driver_lock:
                 self._driver = driver
