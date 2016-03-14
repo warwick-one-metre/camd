@@ -108,6 +108,10 @@ class CameraDaemon:
         self._status_condition = threading.Condition()
         self._command_lock = threading.Lock()
 
+        # Camera data: loaded during init
+        self._camera_model = 'unknown'
+        self._camera_serial = 0
+
         self._temperature = 0
         self._temperature_locked = False
         self._cooler_enabled = False
@@ -295,6 +299,20 @@ class CameraDaemon:
                     print('failed to initialize camera with status {}'.format(status))
                     return CommandStatus.Failed
 
+                # Query camera model
+                model = create_string_buffer(4096)
+                status = driver.GetHeadModel(model)
+                if status != AndorStatus.Success:
+                    print('failed to query camera model with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                # Query camera serial number
+                serial = c_int(0)
+                status = driver.GetCameraSerialNumber(byref(serial))
+                if status != AndorStatus.Success:
+                    print('failed to query camera serial number with status {}'.format(status))
+                    return CommandStatus.Failed
+
                 # Query cooler temperature limits
                 min_temp = c_int(self._min_temperature)
                 max_temp = c_int(self._max_temperature)
@@ -388,6 +406,8 @@ class CameraDaemon:
 
                 with self._driver_lock:
                     self._driver = driver
+                    self._camera_model = model.value.decode('ascii')
+                    self._camera_serial = serial.value
                     self._min_temperature = min_temp.value
                     self._max_temperature = max_temp.value
                     self._ccd_width = width.value
