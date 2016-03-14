@@ -23,7 +23,7 @@
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=no-self-use
 
-from ctypes import c_float, c_int32, c_int, byref, CDLL
+from ctypes import c_float, c_int32, c_int, byref, create_string_buffer, CDLL
 import threading
 import time
 import Pyro4
@@ -133,6 +133,7 @@ class CameraDaemon:
         self._shutter_enabled = False
 
         # Gain index. For blue camera: 0 = 1x, 1 = 2x, 2 = 4x
+        self._gains = []
         self._gain_index = 0
         self._exposure_time = 10
 
@@ -229,6 +230,7 @@ class CameraDaemon:
         data = {'state': self._status}
         if self._status != CameraStatus.Disabled:
             shift_mhz = self._horizontal_shift_speeds[self._horizontal_shift_speed_index]
+            gain_factor = self._gains[self._gain_index]
             data.update({
                 'temperature': self._temperature,
                 'temperature_locked': self._temperature_locked,
@@ -237,6 +239,7 @@ class CameraDaemon:
                 'shutter_enabled': self._shutter_enabled,
                 'exposure_time': self._exposure_time,
                 'gain_index': self._gain_index,
+                'gain_factor': gain_factor,
                 'horizontal_shift_speed_index': self._horizontal_shift_speed_index,
                 'horizontal_shift_speed_mhz': shift_mhz,
                 'geometry_bin_x': self._geometry_bin_x,
@@ -335,6 +338,22 @@ class CameraDaemon:
                     print('failed to set default exposure time with status {}'.format(status))
                     return CommandStatus.Failed
 
+                # Query gains
+                gain_count = c_int(0)
+                status = driver.GetNumberPreAmpGains(byref(gain_count))
+                if status != AndorStatus.Success:
+                    print('failed to query gain count with status ' + str(status))
+                    return CommandStatus.Failed
+
+                gains = []
+                gain = c_float(0)
+                for i in range(gain_count.value):
+                    status = driver.GetPreAmpGain(c_int(i), byref(gain))
+                    if status != AndorStatus.Success:
+                        print('failed to query gain for index {} with status {}'.format(i, status))
+                        return CommandStatus.Failed
+                    gains.append(gain.value)
+
                 # Set default gain index
                 status = driver.SetPreAmpGain(c_int(self._gain_index))
                 if status != AndorStatus.Success:
@@ -375,6 +394,7 @@ class CameraDaemon:
                     self._ccd_height = height.value
                     self._geometry_width = self._ccd_width
                     self._geometry_height = self._ccd_height
+                    self._gains = gains
                     self._horizontal_shift_speeds = speeds
                     self._status = CameraStatus.Idle
 
@@ -436,7 +456,6 @@ class CameraDaemon:
                 self._gain_index = gain_index
 
             return CommandStatus.Succeeded
-
 
     @Pyro4.expose
     def set_horizontal_shift(self, shift_speed_index):

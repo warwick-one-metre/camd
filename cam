@@ -133,7 +133,8 @@ def status():
 
     shutter_mode = FMT_GREEN + 'AUTO' if data['shutter_enabled'] else FMT_RED + 'DARK'
     print('   Shutter mode is ' + FMT_BOLD + shutter_mode + FMT_CLEAR)
-    print('   Pre-amp gain is ' + GAIN_DESCRIPTIONS[data['gain_index']] + FMT_CLEAR)
+    print('   Pre-amp gain is ' + GAIN_DESCRIPTIONS[data['gain_index']] + FMT_CLEAR + ' (' + \
+        FMT_BOLD + '{} e/ADU'.format(data['gain_factor']) + FMT_CLEAR + ')')
     print('   Readout speed is ' + FMT_BOLD + '{:.2f} MHz'.format(
         data['horizontal_shift_speed_mhz']) + FMT_CLEAR)
     print('   Reading {6}({0}, {1}, {2}, {3}){7} px from {6}{4}x{5}{7} binned detector'.format(
