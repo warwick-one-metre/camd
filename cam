@@ -18,7 +18,7 @@
 """Daemon process for managing one of the cameras"""
 
 # pylint: disable=invalid-name
-
+from pathlib import Path
 import os
 import sys
 import time
@@ -62,6 +62,8 @@ STATUS_CODES = {
 
     40: 'error: invalid gain',
     41: 'error: invalid shift speed',
+
+    50: 'error: directory doesn\'t exist or isn\'t writable',
 
     # cam specific codes
     -100: 'error: terminated by user',
@@ -143,7 +145,8 @@ def status():
         data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
 
     print('   Exposure time is ' + FMT_BOLD + '{:.2f}s'.format(data['exposure_time']) + FMT_CLEAR)
-
+    print('   Saving to ' + FMT_BOLD + data['frame_directory'] + FMT_CLEAR)
+    print('   Next frame will be ' + FMT_BOLD + data['next_filename'] + FMT_CLEAR)
     return 0
 
 def set_temperature(args):
@@ -167,6 +170,35 @@ def set_exposure(args):
         with Pyro4.Proxy(CAM_URI) as camd:
             return camd.set_exposure(exposure)
     print('usage: {} exposure <seconds>'.format(SCRIPT_NAME))
+    return -1
+
+def set_directory(args):
+    """Set the output frame directory"""
+    if len(args) == 1:
+        # Validate path and make it absolute
+        try:
+            path = str(Path(args[0]).resolve())
+        except:
+            return 50
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_output_frame_directory(path)
+    print('usage: {} dir <output frame directory>'.format(SCRIPT_NAME))
+    return -1
+
+def set_prefix(args):
+    """Set the output frame filename prefix"""
+    if len(args) == 1:
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_output_frame_prefix(args[0])
+    print('usage: {} prefix <output frame prefix>'.format(SCRIPT_NAME))
+    return -1
+
+def set_frame_number(args):
+    """Set the output frame number"""
+    if len(args) == 1:
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_output_frame_number(args[0])
+    print('usage: {} frameno <output frame number>'.format(SCRIPT_NAME))
     return -1
 
 def set_gain(args):
@@ -253,8 +285,10 @@ def print_usage():
     print()
     print('general commands:')
     print('   status       print a human-readable summary of the camera status')
-    print('   temperature  set target temperature and enable cooling')
     print('   exposure     set exposure time in seconds')
+    print('   dir          set output frame directory')
+    print('   prefix       set output frame prefix')
+    print('   frameno      set output frame number')
     print('   shutter      set shutter mode')
     print('   gain         set gain mode')
     print('   readout      set readout speed')
@@ -263,6 +297,7 @@ def print_usage():
     print()
     print('engineering commands:')
     print('   init         initialize the camera driver')
+    print('   temperature  set target temperature and enable cooling')
     print('   cooleroff    disable cooling')
     print('   kill         disconnect from camera driver')
     print('   reboot       kill and reinitialize the camera driver')
@@ -281,6 +316,12 @@ if __name__ == '__main__':
         run_command(lambda: set_temperature(sys.argv[2:]))
     if sys.argv[1] == 'exposure':
         run_command(lambda: set_exposure(sys.argv[2:]))
+    if sys.argv[1] == 'dir':
+        run_command(lambda: set_directory(sys.argv[2:]))
+    if sys.argv[1] == 'prefix':
+        run_command(lambda: set_prefix(sys.argv[2:]))
+    if sys.argv[1] == 'frameno':
+        run_command(lambda: set_frame_number(sys.argv[2:]))
     if sys.argv[1] == 'shutter':
         run_command(lambda: set_shutter(sys.argv[2:]))
     if sys.argv[1] == 'gain':

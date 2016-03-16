@@ -25,7 +25,9 @@
 
 from ctypes import c_float, c_int32, c_int, c_uint16, c_long, byref, create_string_buffer, CDLL
 import datetime
+from pathlib import Path
 import queue
+import tempfile
 import threading
 import time
 from astropy.io import fits
@@ -69,6 +71,8 @@ class CommandStatus:
     InvalidReadoutHeight = 35
     InvalidGainIndex = 40
     InvalidShiftSpeedIndex = 41
+
+    DirectoryNotWritable = 50
 
 class CameraStatus:
     """Status of the camera hardware"""
@@ -160,6 +164,11 @@ class CameraDaemon:
         # Number of frames acquired this sequence
         self._sequence_frame_count = 0
 
+        # Information for building the output filename
+        self._output_directory = '/home/saft/src/camd/'
+        self._output_frame_prefix = 'object'
+        self._output_frame_number = 0
+
         # Thread that runs the exposure sequence
         # Initialized by start() method
         self._acquisition_thread = None
@@ -228,8 +237,13 @@ class CameraDaemon:
                     for h in header:
                         hdu.header.append(fits.Card(h[0], h[1], h[2]), end=True)
 
-                    hdu.writeto('test.fits.gz', clobber=True)
-                    print('saved test.fits.gz')
+                    path = '{}/{}-{:04d}.fits.gz'.format(self._output_directory,
+                                                         self._output_frame_prefix,
+                                                         self._output_frame_number)
+
+                    hdu.writeto(path, clobber=True)
+                    print('save thread: saved frame ' + path)
+                    self._output_frame_number += 1
                 except Exception as e:
                     print('save thread: swallowing error ' + str(e))
             time.sleep(SAVE_POLL_DELAY)
@@ -358,6 +372,8 @@ class CameraDaemon:
         if self._status != CameraStatus.Disabled:
             shift_mhz = self._horizontal_shift_speeds[self._horizontal_shift_speed_index]
             gain_factor = self._gains[self._gain_index]
+            next_filename = '{}-{:04d}.fits.gz'.format(self._output_frame_prefix,
+                                                       self._output_frame_number)
             data.update({
                 'temperature': self._temperature,
                 'temperature_locked': self._temperature_locked,
@@ -376,7 +392,9 @@ class CameraDaemon:
                 'geometry_width': self._geometry_width,
                 'geometry_height': self._geometry_height,
                 'sequence_frame_limit': self._sequence_frame_limit,
-                'sequence_frame_count': self._sequence_frame_count
+                'sequence_frame_count': self._sequence_frame_count,
+                'frame_directory': self._output_directory,
+                'next_filename': next_filename
             })
         return data
 
@@ -562,6 +580,49 @@ class CameraDaemon:
     # pylint: enable=too-many-branches
     # pylint: enable=too-many-statements
     # pylint: enable=too-many-locals
+
+    @Pyro4.expose
+    def set_output_frame_directory(self, directory):
+        """Sets the output frame directory"""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            # TODO: Only allow if saving is disabled
+
+            # Check that the directory exists and is writable
+            try:
+                path = str(Path(directory).resolve())
+                testfile = tempfile.TemporaryFile(dir=path)
+                self._output_directory = path
+                testfile.close()
+            except:
+                return CommandStatus.DirectoryNotWritable
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def set_output_frame_prefix(self, prefix):
+        """Sets the output frame prefix"""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            # TODO: Only allow if saving is disabled
+            self._output_frame_prefix = prefix
+
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def set_output_frame_number(self, number):
+        """Sets the output frame number"""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            # TODO: Only allow if saving is disabled
+            self._output_frame_number = int(number)
+
+            return CommandStatus.Succeeded
 
     @Pyro4.expose
     def set_shutter(self, enabled):
