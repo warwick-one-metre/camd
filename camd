@@ -224,10 +224,10 @@ class CameraDaemon:
                         (None, None, None),
                         ('COMMENT', ' ---                DATE/TIME                --- ', ''),
                         ('DATE-OBS', frame[1].strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
-                         'date that exposure was triggered (UTC)'),
+                         '[UTC] date that exposure was triggered'),
                         ('DATE-END', frame[2].strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
-                         'date that data was received by PC (UTC)'),
-                        ('EXPTIME', float(self._exposure_time), 'exposure time (seconds)'),
+                         '[UTC] date that data was received by PC'),
+                        ('EXPTIME', float(self._exposure_time), '[s] exposure time'),
                         ('TIME-SRC', 'NTP', 'times are measured using NTP-synced PC clock'),
                     ]
 
@@ -251,22 +251,24 @@ class CameraDaemon:
     def __camera_frame_headers(self):
         """Returns a dictionary of the camera-related fits frame headers"""
         rspd = self._horizontal_shift_speeds[self._horizontal_shift_speed_index]
+        shutter = 'AUTO' if self._shutter_enabled else  'CLOSED'
         return [
             (None, None, None),
             ('COMMENT', ' ---           CAMERA INFORMATION            --- ', ''),
             ('CAMERA', self._camera_model + ' ({})'.format(self._camera_serial),
              'camera model and serial number'),
-            ('CCD-TEMP', round(self._temperature, 2), 'CCD temperature (C)'),
-            ('CCD-TSET', self._target_temperature, 'CCD temperature set point (C)'),
-            ('CCD-TLCK', self._temperature_locked, 'CCD temperature is locked to set point'),
-            ('CCD-XBIN', self._geometry_bin_x, 'x binning (pixels)'),
-            ('CCD-YBIN', self._geometry_bin_y, 'y binning (pixels)'),
+            ('CCD-TEMP', round(self._temperature, 2), '[deg c] CCD temperature at end of exposure'),
+            ('SET-TEMP', self._target_temperature, '[deg c] CCD temperature set point'),
+            ('TEMP-LCK', self._temperature_locked, 'CCD temperature is locked to set point'),
+            ('CCD-XBIN', self._geometry_bin_x, '[px] x binning'),
+            ('CCD-YBIN', self._geometry_bin_y, '[px] y binning'),
             ('CCD-WIND', '[{}:{},{}:{}]'.format(
                 self._geometry_x, self._geometry_x + self._geometry_width - 1,
                 self._geometry_y, self._geometry_y + self._geometry_height - 1),
-             'readout window (unbinned pixels: [x1:x2,y1:y2])'),
-            ('CCD-GAIN', self._gains[self._gain_index], 'nominal readout gain (e / ADU)'),
-            ('CCD-RSPD', rspd, 'readout speed (MHz)'),
+             '[x1:x2,y1:y2] detector readout area'),
+            ('CCD-GAIN', self._gains[self._gain_index], '[e-/DN] nominal readout gain'),
+            ('CCD-RSPD', rspd, '[MHz] CCD readout speed'),
+            ('SHUTTER', shutter, 'shutter mode'),
         ]
 
     def __set_target_temperature_and_cooler(self, target_temperature, cooler_enabled):
