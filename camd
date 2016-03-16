@@ -26,6 +26,7 @@
 
 from ctypes import c_float, c_int32, c_int, c_uint16, c_long, byref, create_string_buffer, CDLL
 import datetime
+import math
 from pathlib import Path
 import queue
 import tempfile
@@ -41,6 +42,10 @@ CAMD_HOST = '192.168.0.101'
 CAMD_PORT = 9010
 CAMD_NAME = 'cam_daemon'
 
+TELD_HOST = '192.168.0.101'
+TELD_PORT = 9003
+TELD_NAME = 'telescope_daemon'
+
 VAISALA_HOST = '192.168.0.102'
 VAISALA_PORT = 9001
 VAISALA_NAME = 'vaisala_daemon'
@@ -53,6 +58,7 @@ SUPERWASP_HOST = '192.168.0.102'
 SUPERWASP_PORT = 9007
 SUPERWASP_NAME = 'superwasp_daemon'
 
+TELD_URL = 'PYRO:' + TELD_NAME + '@' + TELD_HOST + ':' + str(TELD_PORT)
 VAISALA_URL = 'PYRO:' + VAISALA_NAME + '@' + VAISALA_HOST + ':' + str(VAISALA_PORT)
 ROOMALERT_URL = 'PYRO:' + ROOMALERT_NAME + '@' + ROOMALERT_HOST + ':' + str(ROOMALERT_PORT)
 SUPERWASP_URL = 'PYRO:' + SUPERWASP_NAME + '@' + SUPERWASP_HOST + ':' + str(SUPERWASP_PORT)
@@ -248,6 +254,7 @@ class CameraDaemon:
                         ('TIME-SRC', 'NTP', 'times are measured using NTP-synced PC clock'),
                     ]
 
+                    header.extend(self.__telescope_frame_headers())
                     header.extend(self.__camera_frame_headers())
                     header.extend(self.__environment_frame_headers())
 
@@ -265,6 +272,46 @@ class CameraDaemon:
                 except Exception as e:
                     print('save thread: swallowing error ' + str(e))
             time.sleep(SAVE_POLL_DELAY)
+
+    def __telescope_frame_headers(self):
+        """Returns a dictionary of the telescope-related fits frame headers"""
+        h = [
+            (None, None, None),
+            ('COMMENT', ' ---          TELESCOPE INFORMATION          --- ', ''),
+        ]
+
+        try:
+            with Pyro4.Proxy(TELD_URL) as teld:
+                t = teld.report_status()
+                h.append(('TELSTATE', t['state_label'], 'telescope status'))
+                if t['state'] != 0:
+                    harad = t['lst'] - t['ra']
+                    while harad > math.pi:
+                        harad -= 2*math.pi
+                    while harad < -math.pi:
+                        harad += 2*math.pi
+
+                    ra = sexagesimal(t['ra'] * 12 / math.pi)
+                    h.append(('TELRA', ra, 'telescope nominal J2000 RA'))
+                    dec = sexagesimal(math.degrees(t['dec']))
+                    h.append(('TELDEC', dec, 'telescope nominal J2000 Dec'))
+                    ha = sexagesimal(harad * 12 / math.pi)
+                    h.append(('TELHA', ha, 'telescope nominal HA'))
+                    rad = round(math.degrees(t['ra']), 3)
+                    h.append(('TELRAD', rad, '[deg] telescope nominal J2000 RA'))
+                    decd = round(math.degrees(t['dec']), 3)
+                    h.append(('TELDECD', decd, '[deg] telescope nominal J2000 Dec'))
+                    had = round(math.degrees(harad), 3)
+                    h.append(('TELHAD', had, '[deg] telescope nominal HA'))
+                    altd = round(math.degrees(t['alt']), 3)
+                    h.append(('ALTITUDE', altd, '[deg] telescope altitude'))
+                    azd = round(math.degrees(t['az']), 3)
+                    h.append(('AZIMUTH', azd, '[deg] telescope azimuth'))
+                    h.append(('TELFOCUS', t['telescope_focus_um'], '[um] telescope nominal focus'))
+        except Exception:
+            pass
+
+        return h
 
     def __camera_frame_headers(self):
         """Returns a dictionary of the camera-related fits frame headers"""
@@ -895,6 +942,21 @@ class CameraDaemon:
         self._stop_acquisition = True
 
         return CommandStatus.Succeeded
+
+def sexagesimal(angle):
+    """Formats a decimal number in sexagesimal format"""
+    negative = angle < 0
+    angle = math.fabs(angle)
+
+    degrees = int(angle)
+    angle = (angle - degrees) * 60
+    minutes = int(angle)
+    seconds = (angle - minutes) * 60
+
+    if negative:
+        degrees *= -1
+
+    return '{:d}:{:02d}:{:05.2f}'.format(degrees, minutes, seconds)
 
 def spawn_daemon():
     """Spawns the daemon and registers it with Pyro"""
