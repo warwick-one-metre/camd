@@ -36,6 +36,9 @@ from astropy.io import fits
 import numpy
 import Pyro4
 
+# Set automatically when generating RPM package
+SOFTWARE_VERSION = 'UNKNOWN'
+
 PYRO_COMM_TIMEOUT = 5
 
 CAMD_HOST = '192.168.0.101'
@@ -283,6 +286,7 @@ class CameraDaemon:
         try:
             with Pyro4.Proxy(TELD_URL) as teld:
                 t = teld.report_status()
+                h.append(('TELSWVER', t['software_version'], 'TCS server software version'))
                 h.append(('TELSTATE', t['state_label'], 'telescope status'))
                 if t['state'] != 0:
                     harad = t['lst'] - t['ra']
@@ -320,6 +324,7 @@ class CameraDaemon:
         return [
             (None, None, None),
             ('COMMENT', ' ---           CAMERA INFORMATION            --- ', ''),
+            ('CAMSWVER', SOFTWARE_VERSION, 'camera server software version'),
             ('CAMERA', self._camera_model + ' ({})'.format(self._camera_serial),
              'camera model and serial number'),
             ('CCD-TEMP', round(self._temperature, 2), '[deg c] CCD temperature at end of exposure'),
@@ -346,6 +351,8 @@ class CameraDaemon:
         try:
             with Pyro4.Proxy(VAISALA_URL) as vaisala:
                 v = vaisala.last_measurement()
+                if v is not None:
+                    h.append(('VSWVER', v['software_version'], 'vaisala server software version'))
                 if v is not None and v['wind_speed_valid']:
                     h.append(('VWINDSPD', v['wind_speed'], '[km/h] vaisala wind speed'))
                 if v is not None and v['wind_direction_valid']:
@@ -362,6 +369,8 @@ class CameraDaemon:
             with Pyro4.Proxy(ROOMALERT_URL) as roomalert:
                 r = roomalert.last_measurement()
                 if r is not None:
+                    h.append(('RASWVER', r['software_version'],
+                              'room alert server software version'))
                     h.append(('DOMETEMP', r['internal_temp'], '[deg c] dome temperature'))
                     h.append(('DOMEHUMD', r['internal_humidity'], '[%] dome humidity'))
                     h.append(('TRUSTEMP', r['truss_temp'], '[deg c] truss temperature'))
@@ -372,6 +381,8 @@ class CameraDaemon:
             with Pyro4.Proxy(SUPERWASP_URL) as superwasp:
                 s = superwasp.last_measurement()
                 if s is not None:
+                    h.append(('SWSWVER', s['software_version'],
+                              'superwasp monitor server software version'))
                     h.append(('SKYTEMP', s['sky_temp'], '[deg c] sky temperature'))
                     h.append(('DEWPDELT', s['dew_point_delta'],
                               '[deg c] temperature above dew point'))
