@@ -39,6 +39,7 @@ import Pyro4
 
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = 'UNKNOWN'
+INSTRUMENT_ARM = 'BLUE'
 
 PYRO_COMM_TIMEOUT = 5
 
@@ -73,7 +74,12 @@ STATUS_QUERY_DELAY = 1
 # Delay between frame save polls (in seconds)
 SAVE_POLL_DELAY = 1
 
-DS9_PREVIEW_TITLE_FORMAT = '#color=green select=0 font="helvetica 12 bold roman"'
+if INSTRUMENT_ARM == 'RED':
+    TARGET_TEMPERATURE = -60
+    CAMERA_SERIAL = 12723
+else:
+    TARGET_TEMPERATURE = -30
+    CAMERA_SERIAL = 11575
 
 # This should be kept in sync with the dictionary in cam
 class CommandStatus:
@@ -156,7 +162,7 @@ class CameraDaemon:
         self._temperature = 0
         self._temperature_locked = False
         self._cooler_enabled = False
-        self._target_temperature = -30
+        self._target_temperature = TARGET_TEMPERATURE
 
         # Temperature limits: loaded during init
         self._min_temperature = 0
@@ -184,7 +190,7 @@ class CameraDaemon:
 
         # Horizontal shift speeds in MHz: loaded during init
         self._horizontal_shift_speeds = []
-        self._horizontal_shift_speed_index = 0
+        self._horizontal_shift_speed_index = 2
 
         # Limit and number of frames acquired during the next sequence
         # Set to 0 to run continuously
@@ -194,8 +200,8 @@ class CameraDaemon:
         self._sequence_frame_count = 0
 
         # Information for building the output filename
-        self._output_directory = '/home/saft/src/camd/'
-        self._output_frame_prefix = 'object'
+        self._output_directory = '/home/saft/OBS_DATA/'
+        self._output_frame_prefix = 'junk'
         self._output_frame_number = 0
 
         self._output_save_to_disk = False
@@ -362,6 +368,7 @@ class CameraDaemon:
             ('CAMSWVER', SOFTWARE_VERSION, 'camera server software version'),
             ('CAMERA', self._camera_model + ' ({})'.format(self._camera_serial),
              'camera model and serial number'),
+            ('INSTRARM', INSTRUMENT_ARM, 'red or blue arm of the instrument'),
             ('CCD-TEMP', round(self._temperature, 2), '[deg c] CCD temperature at end of exposure'),
             ('SET-TEMP', self._target_temperature, '[deg c] CCD temperature set point'),
             ('TEMP-LCK', self._temperature_locked, 'CCD temperature is locked to set point'),
@@ -500,7 +507,7 @@ class CameraDaemon:
                 return CommandStatus.TemperatureOutsideLimits
 
             if enable_cooler is None:
-                enable_cooler = self.enable_cooler
+                enable_cooler = self._cooler_enabled
 
             if not self.__set_target_temperature_and_cooler(temperature, enable_cooler):
                 return CommandStatus.Failed
@@ -579,37 +586,52 @@ class CameraDaemon:
                 if status != AndorStatus.Success or num_cameras.value == 0:
                     return CommandStatus.CameraNotFound
 
-                print('{} cameras available'.format(num_cameras.value))
-                print('using first camera')
-
+                # Enumerate cameras to find target
                 handle = c_int32()
-                status = driver.GetCameraHandle(c_int32(0), byref(handle))
-                if status != AndorStatus.Success:
-                    print('failed to query camera handle with status {}'.format(status))
-                    return CommandStatus.Failed
-
-                status = driver.SetCurrentCamera(handle)
-                if status != AndorStatus.Success:
-                    print('failed to set current camera with status {}'.format(status))
-                    return CommandStatus.Failed
-
-                status = driver.Initialize('/usr/local/etc/andor'.encode('ascii'))
-                if status != AndorStatus.Success:
-                    print('failed to initialize camera with status {}'.format(status))
-                    return CommandStatus.Failed
-
-                # Query camera model
                 model = create_string_buffer(4096)
-                status = driver.GetHeadModel(model)
-                if status != AndorStatus.Success:
-                    print('failed to query camera model with status {}'.format(status))
-                    return CommandStatus.Failed
+                serial = c_int()
+                found = False
+                print('{} cameras available'.format(num_cameras.value))
+                for i in range(num_cameras.value):
+                    status = driver.GetCameraHandle(c_int32(i), byref(handle))
+                    if status != AndorStatus.Success:
+                        print('failed to query handle for camera {}: status {}'.format(i, status))
+                        continue
 
-                # Query camera serial number
-                serial = c_int(0)
-                status = driver.GetCameraSerialNumber(byref(serial))
-                if status != AndorStatus.Success:
-                    print('failed to query camera serial number with status {}'.format(status))
+                    status = driver.SetCurrentCamera(handle)
+                    if status != AndorStatus.Success:
+                        print('failed to select camera {}: status {}'.format(i, status))
+                        continue
+
+                    status = driver.Initialize('/usr/local/etc/andor'.encode('ascii'))
+                    if status != AndorStatus.Success:
+                        print('failed to initialize camera {}: status {}'.format(i, status))
+                        continue
+
+                    status = driver.GetHeadModel(model)
+                    if status != AndorStatus.Success:
+                        print('failed to query camera {} model: status {}'.format(i, status))
+                        driver.ShutDown()
+                        continue
+
+                    status = driver.GetCameraSerialNumber(byref(serial))
+                    if status != AndorStatus.Success:
+                        print('failed to query camera {} serial: status {}'.format(i, status))
+                        driver.ShutDown()
+                        continue
+
+                    print('camera {} is {} ({})'.format(i, model.value.decode('ascii'),
+                                                        serial.value))
+
+                    if serial.value == CAMERA_SERIAL:
+                        found = True
+                        break
+                    else:
+                        driver.ShutDown()
+
+                if not found:
+                    driver = None
+                    print('camera with serial {} was not found'.format(CAMERA_SERIAL))
                     return CommandStatus.Failed
 
                 # Query cooler temperature limits
@@ -696,7 +718,7 @@ class CameraDaemon:
                     speeds.append(speed.value)
 
                 # Set default horizontal shift index
-                status = driver.SetHSSpeed(c_int(self._horizontal_shift_speed_index))
+                status = driver.SetHSSpeed(c_int(0), c_int(self._horizontal_shift_speed_index))
                 if status != AndorStatus.Success:
                     print('failed to set default horizontal shift speed index with status ' + \
                           str(status))
@@ -708,6 +730,17 @@ class CameraDaemon:
                                          c_int(1), c_int(height.value))
                 if status != AndorStatus.Success:
                     print('failed to set default readout geometry with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                # Set default temperature
+                status = driver.SetTemperature(c_int(self._target_temperature))
+                if status != AndorStatus.Success:
+                    print('failed to set default target temperature with status {}'.format(status))
+                    return CommandStatus.Failed
+
+                status = driver.CoolerON()
+                if status != AndorStatus.Success:
+                    print('failed to enable cooling with status {}'.format(status))
                     return CommandStatus.Failed
 
                 with self._driver_lock:
@@ -727,12 +760,15 @@ class CameraDaemon:
                     self._gains = gains
                     self._horizontal_shift_speeds = speeds
                     self._status = CameraStatus.Idle
+                    print('camera {} ({}) initalized'.format(self._camera_model,
+                                                             self._camera_serial))
 
                 return CommandStatus.Succeeded
             finally:
                 # Clean up on failure
                 if self._status != CameraStatus.Idle:
-                    driver.ShutDown()
+                    if driver is not None:
+                        driver.ShutDown()
                     self._status = CameraStatus.Disabled
     # pylint: enable=too-many-return-statements
     # pylint: enable=too-many-branches
