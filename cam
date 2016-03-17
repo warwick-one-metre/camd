@@ -20,8 +20,11 @@
 # pylint: disable=invalid-name
 from pathlib import Path
 import os
+import random
+import subprocess
 import sys
 import time
+import pyds9
 import Pyro4
 
 PYRO_COMM_TIMEOUT = 5
@@ -145,8 +148,11 @@ def status():
         data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
 
     print('   Exposure time is ' + FMT_BOLD + '{:.2f}s'.format(data['exposure_time']) + FMT_CLEAR)
-    print('   Saving to ' + FMT_BOLD + data['frame_directory'] + FMT_CLEAR)
+    print('   Frame directory is ' + FMT_BOLD + data['frame_directory'] + FMT_CLEAR)
     print('   Next frame will be ' + FMT_BOLD + data['next_filename'] + FMT_CLEAR)
+
+    save_status = FMT_GREEN + 'ENABLED' if data['save_enabled'] else FMT_RED + 'DISABLED'
+    print('   Saving is ' + FMT_BOLD + save_status + FMT_CLEAR)
     return 0
 
 def set_temperature(args):
@@ -244,6 +250,48 @@ def set_geometry(args):
     print('usage: {} geometry <bin_x> <bin_y> <x> <y> <width> <height>'.format(SCRIPT_NAME))
     return -1
 
+def register_preview():
+    """Open a new ds9 preview window and register it with the server"""
+    try:
+        # Generate a random name to avoid collisions
+        names = pyds9.ds9_targets()
+        while True:
+            name = 'preview-{:06d}'.format(random.randint(0, 999999))
+            if not any(n.startswith('DS9:'+name) for n in names):
+                break
+
+        ds9 = pyds9.DS9(name, wait=10)
+        address = ds9.access().split(' ')[-1]
+
+        # Register access for camd to update the preview
+        command = ['xpaset', '-p', name, '-acl', CAM_HOST, '+']
+        subprocess.check_call(command, timeout=5)
+
+        ds9.set('view filename no')
+        ds9.set('view physical no')
+        ds9.set('view frame no')
+        ds9.set('view buttons no')
+        ds9.set('view colorbar no')
+        ds9.set('scale mode zscale')
+        ds9.set('width 512')
+        ds9.set('height 512')
+        ds9.set('background black')
+        ds9.set('zoom 0.25')
+    except Exception as e:
+        print('error: failed to open DS9 preview window')
+        return -1
+    with Pyro4.Proxy(CAM_URI) as camd:
+        return camd.register_preview(address)
+
+def set_save(args):
+    """Enable or disable saving acquired frames to disk"""
+    if len(args) == 1 and (args[0] == 'enable' or args[0] == 'disable'):
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_save(args[0] == 'enable')
+
+    print('usage: {} save (enable|disable)'.format(SCRIPT_NAME))
+    return -1
+
 def start(args):
     """Starts an exposure sequence"""
     if len(args) == 1:
@@ -285,6 +333,8 @@ def print_usage():
     print()
     print('general commands:')
     print('   status       print a human-readable summary of the camera status')
+    print('   preview      open a ds9 window to preview acquired frames')
+    print('   save         enable or disable frame saving')
     print('   exposure     set exposure time in seconds')
     print('   dir          set output frame directory')
     print('   prefix       set output frame prefix')
@@ -332,6 +382,10 @@ if __name__ == '__main__':
         run_command(lambda: set_geometry(sys.argv[2:]))
     if sys.argv[1] == 'status':
         run_command(status)
+    if sys.argv[1] == 'preview':
+        run_command(register_preview)
+    if sys.argv[1] == 'save':
+        run_command(lambda: set_save(sys.argv[2:]))
     if sys.argv[1] == 'start':
         run_command(lambda: start(sys.argv[2:]))
     if sys.argv[1] == 'stop':

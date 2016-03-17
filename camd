@@ -34,6 +34,7 @@ import threading
 import time
 from astropy.io import fits
 import numpy
+import pyds9
 import Pyro4
 
 # Set automatically when generating RPM package
@@ -71,6 +72,8 @@ STATUS_QUERY_DELAY = 1
 
 # Delay between frame save polls (in seconds)
 SAVE_POLL_DELAY = 1
+
+DS9_PREVIEW_TITLE_FORMAT = '#color=green select=0 font="helvetica 12 bold roman"'
 
 # This should be kept in sync with the dictionary in cam
 class CommandStatus:
@@ -195,6 +198,10 @@ class CameraDaemon:
         self._output_frame_prefix = 'object'
         self._output_frame_number = 0
 
+        self._output_save_to_disk = False
+
+        self._ds9_preview_addresses = []
+
         # Thread that runs the exposure sequence
         # Initialized by start() method
         self._acquisition_thread = None
@@ -257,21 +264,49 @@ class CameraDaemon:
                         ('TIME-SRC', 'NTP', 'times are measured using NTP-synced PC clock'),
                     ]
 
-                    header.extend(self.__telescope_frame_headers())
+                    # Camera information is available immediately, so add that for previews
                     header.extend(self.__camera_frame_headers())
-                    header.extend(self.__environment_frame_headers())
-
-                    # Using Card and append() to force comment cards to be placed inline
                     for h in header:
                         hdu.header.append(fits.Card(h[0], h[1], h[2]), end=True)
 
-                    path = '{}/{}-{:04d}.fits.gz'.format(self._output_directory,
-                                                         self._output_frame_prefix,
-                                                         self._output_frame_number)
+                    # Update previews
+                    # Enumerate over a copy so we can remove dead servers from the original
+                    if len(self._ds9_preview_addresses) > 0:
+                        title_text = '{}s @ {} {}'.format(
+                            float(self._exposure_time),
+                            frame[1].strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
+                            '[SAVED]' if self._output_save_to_disk else '[NOT SAVED]')
 
-                    hdu.writeto(path, clobber=True)
-                    print('save thread: saved frame ' + path)
-                    self._output_frame_number += 1
+                        hdu.header['OBJECT'] = title_text
+                        hdulist = fits.HDUList([hdu])
+                        for address in self._ds9_preview_addresses[:]:
+                            try:
+                                p = pyds9.DS9(address, start=False, wait=1)
+                                p.set_pyfits(hdulist)
+                            except Exception as e:
+                                self._ds9_preview_addresses.remove(address)
+                                print('save thread: unregistering preview {}: {}'.format(
+                                    address, e))
+                        hdu.header.remove('OBJECT')
+
+                    if self._output_save_to_disk:
+                        # Telescope and environment information require remote queries that may
+                        # delay the preview, so only include them in the saved frames
+                        header.clear()
+                        header.extend(self.__telescope_frame_headers())
+                        header.extend(self.__environment_frame_headers())
+
+                        # Using Card and append() to force comment cards to be placed inline
+                        for h in header:
+                            hdu.header.append(fits.Card(h[0], h[1], h[2]), end=True)
+
+                        path = '{}/{}-{:04d}.fits.gz'.format(self._output_directory,
+                                                             self._output_frame_prefix,
+                                                             self._output_frame_number)
+
+                        hdu.writeto(path, clobber=True)
+                        print('save thread: saved frame ' + path)
+                        self._output_frame_number += 1
                 except Exception as e:
                     print('save thread: swallowing error ' + str(e))
             time.sleep(SAVE_POLL_DELAY)
@@ -516,7 +551,8 @@ class CameraDaemon:
                 'sequence_frame_limit': self._sequence_frame_limit,
                 'sequence_frame_count': self._sequence_frame_count,
                 'frame_directory': self._output_directory,
-                'next_filename': next_filename
+                'next_filename': next_filename,
+                'save_enabled': self._output_save_to_disk
             })
         return data
 
@@ -731,6 +767,28 @@ class CameraDaemon:
 
             # TODO: Only allow if saving is disabled
             self._output_frame_prefix = prefix
+
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def set_save(self, enabled):
+        """Enable or disable saving to disk"""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            self._output_save_to_disk = enabled
+
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def register_preview(self, address):
+        """Register a ds9 window for previews"""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            self._ds9_preview_addresses.append(address)
 
             return CommandStatus.Succeeded
 
