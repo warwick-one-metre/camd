@@ -23,11 +23,13 @@
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=no-self-use
 # pylint: disable=broad-except
+# pylint: disable=too-many-lines
 
 from ctypes import c_float, c_int32, c_int, c_uint16, c_long, byref, create_string_buffer, CDLL
 import datetime
 import math
-from pathlib import Path
+import pathlib
+import shutil
 import queue
 import tempfile
 import threading
@@ -41,7 +43,25 @@ import Pyro4
 SOFTWARE_VERSION = 'UNKNOWN'
 INSTRUMENT_ARM = 'BLUE'
 
-PYRO_COMM_TIMEOUT = 5
+if INSTRUMENT_ARM == 'RED':
+    DEFAULT_TEMPERATURE = -60
+    CAMERA_SERIAL = 12723
+else:
+    DEFAULT_TEMPERATURE = -30
+    CAMERA_SERIAL = 11575
+
+DEFAULT_OUTPUT_PATH = '/home/saft/OBS_DATA'
+DEFAULT_FRAME_PREFIX = 'junk'
+DEFAULT_EXPOSURE_TIME = 1.0
+DEFAULT_GAIN_INDEX = 0
+DEFAULT_HORIZONTAL_SHIFT_INDEX = 2
+
+LATEST_FRAME_PATH = '/var/tmp/latest-'+INSTRUMENT_ARM+'.fits'
+LATEST_FRAME_TEMP_PATH = '/var/tmp/_latest-'+INSTRUMENT_ARM+'.fits'
+
+# Metadata daemons are expected to be well behaved, so a very short timeout is used
+# to avoid stalling the frame saving process (missing metadata is preferrable to being late)
+PYRO_COMM_TIMEOUT = 1
 
 CAMD_HOST = '192.168.0.101'
 CAMD_PORT = 9010
@@ -70,16 +90,6 @@ SUPERWASP_URL = 'PYRO:' + SUPERWASP_NAME + '@' + SUPERWASP_HOST + ':' + str(SUPE
 
 # Delay between camera state queries (in seconds)
 STATUS_QUERY_DELAY = 1
-
-# Delay between frame save polls (in seconds)
-SAVE_POLL_DELAY = 1
-
-if INSTRUMENT_ARM == 'RED':
-    TARGET_TEMPERATURE = -60
-    CAMERA_SERIAL = 12723
-else:
-    TARGET_TEMPERATURE = -30
-    CAMERA_SERIAL = 11575
 
 # This should be kept in sync with the dictionary in cam
 class CommandStatus:
@@ -162,7 +172,7 @@ class CameraDaemon:
         self._temperature = 0
         self._temperature_locked = False
         self._cooler_enabled = False
-        self._target_temperature = TARGET_TEMPERATURE
+        self._target_temperature = DEFAULT_TEMPERATURE
 
         # Temperature limits: loaded during init
         self._min_temperature = 0
@@ -185,12 +195,12 @@ class CameraDaemon:
 
         # Gain index. For blue camera: 0 = 1x, 1 = 2x, 2 = 4x
         self._gains = []
-        self._gain_index = 0
-        self._exposure_time = 1
+        self._gain_index = DEFAULT_GAIN_INDEX
+        self._exposure_time = DEFAULT_EXPOSURE_TIME
 
         # Horizontal shift speeds in MHz: loaded during init
         self._horizontal_shift_speeds = []
-        self._horizontal_shift_speed_index = 2
+        self._horizontal_shift_speed_index = DEFAULT_HORIZONTAL_SHIFT_INDEX
 
         # Limit and number of frames acquired during the next sequence
         # Set to 0 to run continuously
@@ -200,8 +210,8 @@ class CameraDaemon:
         self._sequence_frame_count = 0
 
         # Information for building the output filename
-        self._output_directory = '/home/saft/OBS_DATA/'
-        self._output_frame_prefix = 'junk'
+        self._output_directory = pathlib.Path(DEFAULT_OUTPUT_PATH)
+        self._output_frame_prefix = DEFAULT_FRAME_PREFIX
         self._output_frame_number = 0
 
         self._output_save_to_disk = False
@@ -212,17 +222,18 @@ class CameraDaemon:
         # Initialized by start() method
         self._acquisition_thread = None
 
+        # Queue and condition for passing data from acquisition thread to processing thread
+        self._acquisition_queue = queue.Queue()
+        self._acquisition_condition = threading.Condition()
+
         # Signal that the exposure sequence should be terminated
         # at end of the current frame
         self._stop_acquisition = False
 
-        # Queue of captured frames waiting to be saved to disk by the status thread
-        self._acquisition_queue = queue.Queue()
-
         # Thread for saving acquired frames to disk
-        save_thread = threading.Thread(target=self.__poll_acquired_frames)
-        save_thread.daemon = True
-        save_thread.start()
+        process_thread = threading.Thread(target=self.__process_acquired_frames)
+        process_thread.daemon = True
+        process_thread.start()
 
         # Thread for polling camera status
         status_thread = threading.Thread(target=self.__poll_camera_status)
@@ -246,11 +257,18 @@ class CameraDaemon:
 
             time.sleep(STATUS_QUERY_DELAY)
 
-    def __poll_acquired_frames(self):
-        """Background thread that polls the acquisition queue and saves frames to disk"""
+    def __process_acquired_frames(self):
+        """Background thread that saves acquired frames, invokes autoguider, and updates previews"""
         while True:
-            # Save any acquired frames to disk
+            # Block until a frame is available for processing
+            with self._acquisition_condition:
+                self._acquisition_condition.wait()
+
             while not self._acquisition_queue.empty():
+                # Frames are saved in multple stages:
+                #  1) The last acquired frame is always saved as /var/tmp/latest-<camera>.fits
+                #  2) The autoguider and ds9 clients are then updated
+                #  3) If saving is enabled the frame is then saved using the defined settings
                 try:
                     frame = self._acquisition_queue.get()
                     shape = (self._geometry_height // self._geometry_bin_y,
@@ -258,29 +276,34 @@ class CameraDaemon:
                     data = numpy.frombuffer(frame[0], dtype=numpy.uint16).reshape(shape)
                     hdu = fits.PrimaryHDU(data)
 
-                    # Build list of header keys
-                    header = [
-                        (None, None, None),
-                        ('COMMENT', ' ---                DATE/TIME                --- ', ''),
-                        ('DATE-OBS', frame[1].strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
-                         '[UTC] date that exposure was triggered'),
-                        ('DATE-END', frame[2].strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
-                         '[UTC] date that data was received by PC'),
-                        ('EXPTIME', float(self._exposure_time), '[s] exposure time'),
-                        ('TIME-SRC', 'NTP', 'times are measured using NTP-synced PC clock'),
-                    ]
-
-                    # Camera information is available immediately, so add that for previews
-                    header.extend(self.__camera_frame_headers())
-                    for h in header:
+                    # Using Card and append() to force comment cards to be placed inline
+                    for h in frame[1]:
                         hdu.header.append(fits.Card(h[0], h[1], h[2]), end=True)
+
+                    print('saved at', datetime.datetime.utcnow())
+
+                    # Mimic an atomic save by writing to a temporary file and then moving
+                    hdu.writeto(LATEST_FRAME_TEMP_PATH, clobber=True)
+                    shutil.move(LATEST_FRAME_TEMP_PATH, LATEST_FRAME_PATH)
+
+                    # TODO: Notify autoguiding
+
+                    # Compressing the frame can take a surprising amount of time (~10 sec!), so
+                    # we save uncompressed, and run a compression pass at the end of the night.
+                    if self._output_save_to_disk:
+                        filename = self._output_frame_prefix + \
+                            '-{:04d}.fits'.format(self._output_frame_number)
+                        shutil.copy(LATEST_FRAME_PATH, str(self._output_directory / filename))
+                        self._output_frame_number += 1
+
+                        # TODO: Notify reduction
 
                     # Update previews
                     # Enumerate over a copy so we can remove dead servers from the original
                     if len(self._ds9_preview_addresses) > 0:
                         title_text = '{}s @ {} {}'.format(
                             float(self._exposure_time),
-                            frame[1].strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
+                            hdu.header['DATE-OBS'],
                             '[SAVED]' if self._output_save_to_disk else '[NOT SAVED]')
 
                         hdu.header['OBJECT'] = title_text
@@ -293,29 +316,8 @@ class CameraDaemon:
                                 self._ds9_preview_addresses.remove(address)
                                 print('save thread: unregistering preview {}: {}'.format(
                                     address, e))
-                        hdu.header.remove('OBJECT')
-
-                    if self._output_save_to_disk:
-                        # Telescope and environment information require remote queries that may
-                        # delay the preview, so only include them in the saved frames
-                        header.clear()
-                        header.extend(self.__telescope_frame_headers())
-                        header.extend(self.__environment_frame_headers())
-
-                        # Using Card and append() to force comment cards to be placed inline
-                        for h in header:
-                            hdu.header.append(fits.Card(h[0], h[1], h[2]), end=True)
-
-                        path = '{}/{}-{:04d}.fits.gz'.format(self._output_directory,
-                                                             self._output_frame_prefix,
-                                                             self._output_frame_number)
-
-                        hdu.writeto(path, clobber=True)
-                        print('save thread: saved frame ' + path)
-                        self._output_frame_number += 1
                 except Exception as e:
                     print('save thread: swallowing error ' + str(e))
-            time.sleep(SAVE_POLL_DELAY)
 
     def __telescope_frame_headers(self):
         """Returns a dictionary of the telescope-related fits frame headers"""
@@ -483,14 +485,36 @@ class CameraDaemon:
                           str(status))
                     break
 
-                self._sequence_frame_count += 1
-                self._acquisition_queue.put((framedata, start_time, end_time))
+                # Build metadata list
+                header = [
+                    (None, None, None),
+                    ('COMMENT', ' ---                DATE/TIME                --- ', ''),
+                    ('DATE-OBS', start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
+                     '[UTC] date that exposure was triggered'),
+                    ('DATE-END', end_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
+                     '[UTC] date that data was received by PC'),
+                    ('EXPTIME', float(self._exposure_time), '[s] exposure time'),
+                    ('TIME-SRC', 'NTP', 'times are measured using NTP-synced PC clock'),
+                ]
 
-                # Set exposure count completed
+                # Query additional metadata
+                # The next acquisition is blocked on these queries, so make sure they are fast!
+                header.extend(self.__telescope_frame_headers())
+                header.extend(self.__camera_frame_headers())
+                header.extend(self.__environment_frame_headers())
+
+                # Pass frame to processing thread
+                self._acquisition_queue.put((framedata, header))
+                with self._acquisition_condition:
+                    self._acquisition_condition.notify()
+
+                # Continue exposure sequence?
+                self._sequence_frame_count += 1
                 if self._sequence_frame_limit > 0 and \
                         self._sequence_frame_count >= self._sequence_frame_limit:
                     self._stop_acquisition = True
         finally:
+            print('exposure sequence: complete')
             self._status = CameraStatus.Idle
 
     @Pyro4.expose
@@ -536,8 +560,8 @@ class CameraDaemon:
         if self._status != CameraStatus.Disabled:
             shift_mhz = self._horizontal_shift_speeds[self._horizontal_shift_speed_index]
             gain_factor = self._gains[self._gain_index]
-            next_filename = '{}-{:04d}.fits.gz'.format(self._output_frame_prefix,
-                                                       self._output_frame_number)
+            next_filename = self._output_frame_prefix + \
+                '-{:04d}.fits'.format(self._output_frame_number)
             data.update({
                 'temperature': self._temperature,
                 'temperature_locked': self._temperature_locked,
@@ -557,7 +581,7 @@ class CameraDaemon:
                 'geometry_height': self._geometry_height,
                 'sequence_frame_limit': self._sequence_frame_limit,
                 'sequence_frame_count': self._sequence_frame_count,
-                'frame_directory': self._output_directory,
+                'frame_directory': str(self._output_directory),
                 'next_filename': next_filename,
                 'save_enabled': self._output_save_to_disk
             })
@@ -786,8 +810,8 @@ class CameraDaemon:
 
             # Check that the directory exists and is writable
             try:
-                path = str(Path(directory).resolve())
-                testfile = tempfile.TemporaryFile(dir=path)
+                path = pathlib.Path(directory).resolve()
+                testfile = tempfile.TemporaryFile(dir=str(path))
                 self._output_directory = path
                 testfile.close()
             except Exception:
