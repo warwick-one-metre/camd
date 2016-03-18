@@ -257,7 +257,7 @@ def register_preview():
         names = pyds9.ds9_targets()
         while True:
             name = 'preview-{:06d}'.format(random.randint(0, 999999))
-            if not any(n.startswith('DS9:'+name) for n in names):
+            if names is None or not any(n.startswith('DS9:'+name) for n in names):
                 break
 
         ds9 = pyds9.DS9(name, wait=10)
