@@ -58,12 +58,9 @@ STATUS_CODES = {
     20: 'error: requested temperature is outside the supported limits',
 
     # Readout geometry
-    30: 'error: invalid horizontal binning',
-    31: 'error: invalid vertical binning',
-    32: 'error: invalid readout start x',
-    33: 'error: invalid readout start x',
-    34: 'error: invalid readout width',
-    35: 'error: invalid readout height',
+    30: 'error: binning does not evenly divide readout window',
+    31: 'error: window size is not compatible with the current binning',
+    32: 'error: window extends outside the bounds of the ccd',
 
     40: 'error: invalid gain',
     41: 'error: invalid shift speed',
@@ -145,11 +142,11 @@ def status():
         FMT_BOLD + '{} e/ADU'.format(data['gain_factor']) + FMT_CLEAR + ')')
     print('   Readout speed is ' + FMT_BOLD + '{:.2f} MHz'.format(
         data['horizontal_shift_speed_mhz']) + FMT_CLEAR)
-    print('   Reading {6}({0}, {1}, {2}, {3}){7} px from {6}{4}x{5}{7} binned detector'.format(
-        data['geometry_x'], data['geometry_y'], data['geometry_width'], data['geometry_height'],
-        data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
-
-    print('   Exposure time is ' + FMT_BOLD + '{:.2f}s'.format(data['exposure_time']) + FMT_CLEAR)
+    print('   Readout window is {4}({0}, {1}, {2}, {3}) px{5}'.format(data['geometry_x'],
+        data['geometry_y'], data['geometry_width'], data['geometry_height'], FMT_BOLD, FMT_CLEAR))
+    print('   Readout binning is {2}{0} x {1} px{3}'.format(
+        data['geometry_x'], data['geometry_y'], FMT_BOLD, FMT_CLEAR))
+    print('   Exposure time is ' + FMT_BOLD + '{:.2f} s'.format(data['exposure_time']) + FMT_CLEAR)
     print('   Frame directory is ' + FMT_BOLD + data['frame_directory'] + FMT_CLEAR)
     print('   Next frame will be ' + FMT_BOLD + data['next_filename'] + FMT_CLEAR)
 
@@ -237,19 +234,26 @@ def set_shutter(args):
     print('usage: {} shutter [auto|dark]'.format(SCRIPT_NAME))
     return -1
 
-def set_geometry(args):
-    """Set the camera binning and window"""
-    if len(args) == 6:
-        bin_x = int(args[0])
-        bin_y = int(args[1])
-        x = int(args[2])
-        y = int(args[3])
-        width = int(args[4])
-        height = int(args[5])
-
+def set_binning(args):
+    """Set the camera binning"""
+    if len(args) == 1:
+        # Assume square pixels
+        binning = int(args[0])
         with Pyro4.Proxy(CAM_URI) as camd:
-            return camd.set_geometry(bin_x, bin_y, x, y, width, height)
-    print('usage: {} geometry <bin_x> <bin_y> <x> <y> <width> <height>'.format(SCRIPT_NAME))
+            return camd.set_binning(binning, binning)
+    print('usage: {} binning <pixel size>'.format(SCRIPT_NAME))
+    return -1
+
+def set_window(args):
+    """Set the camera readout window"""
+    if len(args) == 4:
+        x = int(args[0])
+        y = int(args[1])
+        width = int(args[2])
+        height = int(args[3])
+        with Pyro4.Proxy(CAM_URI) as camd:
+            return camd.set_window(x, y, width, height)
+    print('usage: {} window <x> <y> <width> <height>'.format(SCRIPT_NAME))
     return -1
 
 def register_preview():
@@ -344,7 +348,8 @@ def print_usage():
     print('   shutter      set shutter mode')
     print('   gain         set gain mode')
     print('   readout      set readout speed')
-    print('   geometry     set readout binning and window')
+    print('   bin          set readout binning')
+    print('   window       set readout window')
     print('   start        start an exposure sequence')
     print()
     print('engineering commands:')
@@ -380,8 +385,10 @@ if __name__ == '__main__':
         run_command(lambda: set_gain(sys.argv[2:]))
     if sys.argv[1] == 'readout':
         run_command(lambda: set_horizontal_shift_speed(sys.argv[2:]))
-    if sys.argv[1] == 'geometry':
-        run_command(lambda: set_geometry(sys.argv[2:]))
+    if sys.argv[1] == 'bin':
+        run_command(lambda: set_binning(sys.argv[2:]))
+    if sys.argv[1] == 'window':
+        run_command(lambda: set_window(sys.argv[2:]))
     if sys.argv[1] == 'status':
         run_command(status)
     if sys.argv[1] == 'preview':
