@@ -83,10 +83,15 @@ SUPERWASP_HOST = '192.168.0.102'
 SUPERWASP_PORT = 9007
 SUPERWASP_NAME = 'superwasp_daemon'
 
+PIPELINE_HOST = '192.168.0.101'
+PIPELINE_PORT = 9012
+PIPELINE_NAME = 'pipeline_daemon'
+
 TELD_URL = 'PYRO:' + TELD_NAME + '@' + TELD_HOST + ':' + str(TELD_PORT)
 VAISALA_URL = 'PYRO:' + VAISALA_NAME + '@' + VAISALA_HOST + ':' + str(VAISALA_PORT)
 ROOMALERT_URL = 'PYRO:' + ROOMALERT_NAME + '@' + ROOMALERT_HOST + ':' + str(ROOMALERT_PORT)
 SUPERWASP_URL = 'PYRO:' + SUPERWASP_NAME + '@' + SUPERWASP_HOST + ':' + str(SUPERWASP_PORT)
+PIPELINE_URL = 'PYRO:' + PIPELINE_NAME + '@' + PIPELINE_HOST + ':' + str(PIPELINE_PORT)
 
 # Delay between camera state queries (in seconds)
 STATUS_QUERY_DELAY = 1
@@ -267,8 +272,10 @@ class CameraDaemon:
             while not self._acquisition_queue.empty():
                 # Frames are saved in multple stages:
                 #  1) The last acquired frame is always saved as /var/tmp/latest-<camera>.fits
-                #  2) The autoguider and ds9 clients are then updated
+                #  2) The pipeline daemon is notified that the latest frame has been updated
                 #  3) If saving is enabled the frame is then saved using the defined settings
+                #  4) If saving is enabled the pipeline daemon is notified that a new frame is saved
+                #  5) Any registered preview clients are updated
                 try:
                     frame = self._acquisition_queue.get()
                     shape = (self._geometry_height // self._geometry_bin_y,
@@ -280,23 +287,33 @@ class CameraDaemon:
                     for h in frame[1]:
                         hdu.header.append(fits.Card(h[0], h[1], h[2]), end=True)
 
-                    print('saved at', datetime.datetime.utcnow())
+                    # Save errors shouldn't interfere with preview updates, so we use a separate
+                    # try/catch
+                    try:
+                        # Mimic an atomic save by writing to a temporary file and then moving
+                        hdu.writeto(LATEST_FRAME_TEMP_PATH, clobber=True)
+                        shutil.move(LATEST_FRAME_TEMP_PATH, LATEST_FRAME_PATH)
+                        try:
+                            with Pyro4.Proxy(PIPELINE_URL) as pipeline:
+                                pipeline.notify_latest_frame(INSTRUMENT_ARM, LATEST_FRAME_PATH)
+                        except Exception as e:
+                            print('save thread: failed to notify latest frame with error ' + str(e))
+                        # Compressing the frame can take a surprising amount of time (~10 sec!), so
+                        # we save uncompressed, and run a compression pass at the end of the night.
+                        if self._output_save_to_disk:
+                            filename = self._output_frame_prefix + \
+                                '-{:04d}.fits'.format(self._output_frame_number)
+                            path = str(self._output_directory / filename)
+                            shutil.copy(LATEST_FRAME_PATH, path)
+                            self._output_frame_number += 1
 
-                    # Mimic an atomic save by writing to a temporary file and then moving
-                    hdu.writeto(LATEST_FRAME_TEMP_PATH, clobber=True)
-                    shutil.move(LATEST_FRAME_TEMP_PATH, LATEST_FRAME_PATH)
-
-                    # TODO: Notify autoguiding
-
-                    # Compressing the frame can take a surprising amount of time (~10 sec!), so
-                    # we save uncompressed, and run a compression pass at the end of the night.
-                    if self._output_save_to_disk:
-                        filename = self._output_frame_prefix + \
-                            '-{:04d}.fits'.format(self._output_frame_number)
-                        shutil.copy(LATEST_FRAME_PATH, str(self._output_directory / filename))
-                        self._output_frame_number += 1
-
-                        # TODO: Notify reduction
+                            try:
+                                with Pyro4.Proxy(PIPELINE_URL) as pipeline:
+                                    pipeline.notify_saved_frame(INSTRUMENT_ARM, path)
+                            except Exception as e:
+                                print('save thread: failed to notify frame with error ' + str(e))
+                    except Exception as e:
+                        print('save thread: swallowing error ' + str(e))
 
                     # Update previews
                     # Enumerate over a copy so we can remove dead servers from the original
