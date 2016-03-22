@@ -31,10 +31,22 @@ import Pyro4
 
 PYRO_COMM_TIMEOUT = 5
 
-CAM_HOST = '192.168.0.101'
-CAM_PORT = 9010
-CAM_NAME = 'cam_daemon'
+# Set automatically when generating RPM package
+SOFTWARE_VERSION = 'UNKNOWN'
+INSTRUMENT_ARM = 'BLUE'
 
+if INSTRUMENT_ARM == 'RED':
+    DEFAULT_TEMPERATURE = -60
+    CAMERA_SERIAL = 12723
+    CAM_PORT = 9010
+    CAM_NAME = 'red_camera_daemon'
+else:
+    DEFAULT_TEMPERATURE = -30
+    CAMERA_SERIAL = 11575
+    CAM_PORT = 9011
+    CAM_NAME = 'blue_camera_daemon'
+
+CAM_HOST = '192.168.0.101'
 CAM_URI = 'PYRO:' + CAM_NAME + '@' + CAM_HOST + ':' + str(CAM_PORT)
 SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook

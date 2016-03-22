@@ -43,12 +43,17 @@ import Pyro4
 SOFTWARE_VERSION = 'UNKNOWN'
 INSTRUMENT_ARM = 'BLUE'
 
+CAMD_HOST = '192.168.0.101'
 if INSTRUMENT_ARM == 'RED':
     DEFAULT_TEMPERATURE = -60
     CAMERA_SERIAL = 12723
+    CAMD_PORT = 9010
+    CAMD_NAME = 'red_camera_daemon'
 else:
     DEFAULT_TEMPERATURE = -30
     CAMERA_SERIAL = 11575
+    CAMD_PORT = 9011
+    CAMD_NAME = 'blue_camera_daemon'
 
 DEFAULT_OUTPUT_PATH = '/home/saft/OBS_DATA'
 DEFAULT_FRAME_PREFIX = 'junk'
@@ -62,10 +67,6 @@ LATEST_FRAME_TEMP_PATH = '/var/tmp/_latest-'+INSTRUMENT_ARM+'.fits'
 # Metadata daemons are expected to be well behaved, so a very short timeout is used
 # to avoid stalling the frame saving process (missing metadata is preferrable to being late)
 PYRO_COMM_TIMEOUT = 1
-
-CAMD_HOST = '192.168.0.101'
-CAMD_PORT = 9010
-CAMD_NAME = 'cam_daemon'
 
 TELD_HOST = '192.168.0.101'
 TELD_PORT = 9003
