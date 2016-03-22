@@ -157,7 +157,7 @@ def status():
     print('   Readout window is {4}({0}, {1}, {2}, {3}) px{5}'.format(data['geometry_x'],
         data['geometry_y'], data['geometry_width'], data['geometry_height'], FMT_BOLD, FMT_CLEAR))
     print('   Readout binning is {2}{0} x {1} px{3}'.format(
-        data['geometry_x'], data['geometry_y'], FMT_BOLD, FMT_CLEAR))
+        data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
     print('   Exposure time is ' + FMT_BOLD + '{:.2f} s'.format(data['exposure_time']) + FMT_CLEAR)
     print('   Frame directory is ' + FMT_BOLD + data['frame_directory'] + FMT_CLEAR)
     print('   Next frame will be ' + FMT_BOLD + data['next_filename'] + FMT_CLEAR)

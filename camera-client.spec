@@ -1,5 +1,5 @@
 Name:      onemetre-{CAMERA}-camera-client
-Version:   1.0
+Version:   1.1
 Release:   0
 Url:       https://github.com/warwick-one-metre/camd
 Summary:   Camera control client for the Warwick one-metre telescope.
