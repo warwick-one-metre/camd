@@ -229,6 +229,7 @@ class CameraDaemon:
         # Queue and condition for passing data from acquisition thread to processing thread
         self._acquisition_queue = queue.Queue()
         self._acquisition_condition = threading.Condition()
+        self._preview_lock = threading.Lock()
 
         # Signal that the exposure sequence should be terminated
         # at end of the current frame
@@ -324,16 +325,31 @@ class CameraDaemon:
 
                         hdu.header['OBJECT'] = title_text
                         hdulist = fits.HDUList([hdu])
-                        for address in self._ds9_preview_addresses[:]:
-                            try:
-                                p = pyds9.DS9(address, start=False, wait=1)
-                                p.set_pyfits(hdulist)
-                            except Exception as e:
-                                self._ds9_preview_addresses.remove(address)
-                                print('save thread: unregistering preview {}: {}'.format(
-                                    address, e))
+                        self.__update_previews(hdulist)
                 except Exception as e:
                     print('save thread: swallowing error ' + str(e))
+
+    def __update_previews(self, hdulist=None, xpa_messages=None, unregister_on_error=True):
+        """Update registered preview clients with new data
+           if hdulist is non-None the frame will be updated
+           any xpa_messages will then be sent vertabim"""
+        with self._preview_lock:
+            for address in self._ds9_preview_addresses[:]:
+                try:
+                    p = pyds9.DS9(address, start=False, wait=1)
+                    if hdulist is not None:
+                        p.set_pyfits(hdulist)
+                    if xpa_messages is not None:
+                        for message in xpa_messages:
+                            if isinstance(message, tuple):
+                                p.set(message[0], message[1])
+                            else:
+                                p.set(message)
+                except Exception as e:
+                    if unregister_on_error:
+                        self._ds9_preview_addresses.remove(address)
+                        print('save thread: unregistering preview {}: {}'.format(
+                            address, e))
 
     def __telescope_frame_headers(self):
         """Returns a dictionary of the telescope-related fits frame headers"""
@@ -867,6 +883,13 @@ class CameraDaemon:
             self._ds9_preview_addresses.append(address)
 
             return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def update_previews(self, xpa_commands):
+        """Send xpa commands to active previews"""
+        # Errors may be caused by the command, so don't unregister on failure
+        self.__update_previews(None, xpa_commands, False)
+        return CommandStatus.Succeeded
 
     @Pyro4.expose
     def set_output_frame_number(self, number):
