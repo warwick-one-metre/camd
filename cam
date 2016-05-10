@@ -290,11 +290,12 @@ def register_preview():
         ds9.set('view frame no')
         ds9.set('view buttons no')
         ds9.set('view colorbar no')
+        ds9.set('view layout vertical')
         ds9.set('scale mode zscale')
         ds9.set('width 512')
-        ds9.set('height 512')
+        ds9.set('height 572')
         ds9.set('background black')
-        ds9.set('zoom 0.25')
+        ds9.set('zoom 0.5')
     except Exception:
         print('error: failed to open DS9 preview window')
         return -1
