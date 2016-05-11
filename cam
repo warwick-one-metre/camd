@@ -88,8 +88,9 @@ CAMERA_STATE_DESCRIPTIONS = {
     0: '\033[1m\033[91mOFFLINE\033[0m',
     1: '\033[1m\033[91mINITIALIZING\033[0m',
     2: '\033[1mIDLE\033[0m',
-    3: '\033[1m\033[92mACQUIRING\033[0m',
-    4: '\033[1m\033[91mABORTING\033[0m'
+    3: '\033[1m\033[92mEXPOSING\033[0m',
+    4: '\033[1m\033[93mREADING\033[0m',
+    5: '\033[1m\033[91mABORTING\033[0m'
 }
 
 GAIN_DESCRIPTIONS = {
@@ -127,6 +128,10 @@ def status():
     state_desc = '\033[1m\033[93mUNKNOWN\033[0m'
     if data['state'] in CAMERA_STATE_DESCRIPTIONS:
         state_desc = CAMERA_STATE_DESCRIPTIONS[data['state']]
+
+    if data['state'] == 3:
+        progress = '{:.1f} / {:.1f}s'.format(data['exposure_progress'], data['exposure_time'])
+        state_desc += ' (' + FMT_BOLD + progress + FMT_CLEAR + ')'
 
     # Camera is disabled
     print('   Camera is {}'.format(state_desc))

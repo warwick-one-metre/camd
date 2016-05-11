@@ -125,7 +125,9 @@ class CommandStatus:
 
 class CameraStatus:
     """Status of the camera hardware"""
-    Disabled, Initializing, Idle, Acquiring, Aborting = range(5)
+    # Note that the Reading status is assumed at status-query time
+    # and is never assigned to CameraDaemon._status
+    Disabled, Initializing, Idle, Acquiring, Reading, Aborting = range(6)
 
 class AndorStatus:
     """Status codes returned by libandor"""
@@ -212,6 +214,9 @@ class CameraDaemon:
 
         # Number of frames acquired this sequence
         self._sequence_frame_count = 0
+
+        # Time that the latest frame in the exposure was started
+        self._sequence_exposure_start_time = datetime.datetime.utcnow()
 
         # Information for building the output filename
         self._output_directory = pathlib.Path(DEFAULT_OUTPUT_PATH)
@@ -503,6 +508,8 @@ class CameraDaemon:
                           str(status))
                     break
 
+                self._sequence_exposure_start_time = start_time
+
                 # TODO: thread safety: do we need the driver lock?
                 status = self._driver.WaitForAcquisition()
                 if status != AndorStatus.Success:
@@ -594,6 +601,16 @@ class CameraDaemon:
             gain_factor = self._gains[self._gain_index]
             next_filename = self._output_frame_prefix + \
                 '-{:04d}.fits'.format(self._output_frame_number)
+
+            # Estimate the current frame progress based on the time delta
+            progress = 0
+            if self._status == CameraStatus.Acquiring:
+                delta = datetime.datetime.utcnow() - self._sequence_exposure_start_time
+                progress = delta.total_seconds()
+                if progress > self._exposure_time:
+                    data['state'] = CameraStatus.Reading
+                    progress = 0
+
             data.update({
                 'temperature': self._temperature,
                 'temperature_locked': self._temperature_locked,
@@ -601,6 +618,7 @@ class CameraDaemon:
                 'cooler_enabled': self._cooler_enabled,
                 'shutter_enabled': self._shutter_enabled,
                 'exposure_time': self._exposure_time,
+                'exposure_progress': progress,
                 'gain_index': self._gain_index,
                 'gain_factor': gain_factor,
                 'horizontal_shift_speed_index': self._horizontal_shift_speed_index,
