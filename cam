@@ -138,6 +138,13 @@ def status():
     if data['state'] == 0:
         return 0
 
+    if data['state'] > 2:
+        if data['sequence_frame_limit'] > 0:
+            print('   Acquiring frame ' + FMT_BOLD + str(data['sequence_frame_count'] + 1) + \
+                  ' / ' + str(data['sequence_frame_limit']) + FMT_CLEAR)
+        else:
+            print('   Acquiring ' + FMT_BOLD + 'UNTIL STOPPED' + FMT_CLEAR)
+
     temperature_status = ''
     temperature_fmt = FMT_BOLD + FMT_RED
     if data['temperature_locked']:
