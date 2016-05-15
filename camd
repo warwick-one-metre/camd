@@ -49,11 +49,15 @@ if INSTRUMENT_ARM == 'RED':
     CAMERA_SERIAL = 12723
     CAMD_PORT = 9010
     CAMD_NAME = 'red_camera_daemon'
+    PRESCAN_COLUMNS = 20
+    POSTSCAN_COLUMNS = 20
 else:
     DEFAULT_TEMPERATURE = -30
     CAMERA_SERIAL = 11575
     CAMD_PORT = 9011
     CAMD_NAME = 'blue_camera_daemon'
+    PRESCAN_COLUMNS = 0
+    POSTSCAN_COLUMNS = 0
 
 DEFAULT_OUTPUT_PATH = '/home/saft/OBS_DATA'
 DEFAULT_FRAME_PREFIX = 'junk'
@@ -195,6 +199,12 @@ class CameraDaemon:
         self._geometry_y = 0
         self._geometry_width = 0
         self._geometry_height = 0
+
+        # Image geometry: masking away the overscan on the red camera
+        self._geometry_image_x1 = 0
+        self._geometry_image_x2 = 0
+        self._geometry_image_y1 = 0
+        self._geometry_image_y2 = 0
 
         # Shutter enabled (opens during exposures), or remains closed
         self._shutter_enabled = False
@@ -416,10 +426,14 @@ class CameraDaemon:
             ('CCD-WIND', '[{}:{},{}:{}]'.format(
                 self._geometry_x, self._geometry_x + self._geometry_width - 1,
                 self._geometry_y, self._geometry_y + self._geometry_height - 1),
-             '[x1:x2,y1:y2] detector readout area'),
+             '[x1:x2,y1:y2] readout region (detector coords)'),
             ('CCD-GAIN', self._gains[self._gain_index], '[e-/DN] nominal readout gain'),
             ('CCD-RSPD', rspd, '[MHz] CCD readout speed'),
             ('SHUTTER', shutter, 'shutter mode'),
+            ('IMAG-RGN', '[{}:{},{}:{}]'.format(
+                self._geometry_image_x1, self._geometry_image_x2,
+                self._geometry_image_y1, self._geometry_image_y2),
+             '[x1:x2,y1:y2] image region (image coords)'),
         ]
 
     def __environment_frame_headers(self):
@@ -831,6 +845,12 @@ class CameraDaemon:
                     self._geometry_y = 1
                     self._geometry_width = self._ccd_width
                     self._geometry_height = self._ccd_height
+
+                    self._geometry_image_x1 = 1 + PRESCAN_COLUMNS
+                    self._geometry_image_x2 = self._ccd_width - POSTSCAN_COLUMNS
+                    self._geometry_image_y1 = 1
+                    self._geometry_image_y2 = self._ccd_height
+
                     self._gains = gains
                     self._horizontal_shift_speeds = speeds
                     self._status = CameraStatus.Idle
@@ -1033,6 +1053,23 @@ class CameraDaemon:
             self._geometry_y = y
             self._geometry_width = width
             self._geometry_height = height
+
+            # Round prescan and postscan up to nearest superpixel to avoid bleeding
+            prescan = int((PRESCAN_COLUMNS + bin_x - 1) / bin_x)
+            postscan = int((POSTSCAN_COLUMNS + bin_x - 1) / bin_x)
+
+            # Work out how much pre/post scan columns are left in the requested window
+            window_x = int((x - 1) / bin_x)
+            self._geometry_image_x1 = 1 + max(prescan, int((x - 1) / bin_x)) - window_x
+            self._geometry_image_x2 = min(int(self._ccd_width / bin_x) - postscan, \
+                int((x + width - 1) / bin_x)) - window_x
+            self._geometry_image_y1 = 1 + int((y - 1) / bin_y)
+            self._geometry_image_y2 = int(height / bin_y)
+
+            # Window is completely in the overscan
+            if self._geometry_image_x2 <= self._geometry_image_x1:
+                self._geometry_image_x1 = self._geometry_image_x2 = 0
+                self._geometry_image_y1 = self._geometry_image_y2 = 0
 
         return True
 
