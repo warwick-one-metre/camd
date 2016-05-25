@@ -78,11 +78,11 @@ TELD_NAME = 'telescope_daemon'
 
 VAISALA_HOST = '192.168.0.102'
 VAISALA_PORT = 9001
-VAISALA_NAME = 'vaisala_daemon'
+VAISALA_NAME = 'onemetre_vaisala_daemon'
 
 ROOMALERT_HOST = '192.168.0.102'
 ROOMALERT_PORT = 9008
-ROOMALERT_NAME = 'roomalert_daemon'
+ROOMALERT_NAME = 'onemetre_roomalert_daemon'
 
 SUPERWASP_HOST = '192.168.0.102'
 SUPERWASP_PORT = 9007
