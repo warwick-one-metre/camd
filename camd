@@ -402,6 +402,14 @@ class CameraDaemon:
                     azd = round(math.degrees(t['az']), 3)
                     h.append(('AZIMUTH', azd, '[deg] telescope azimuth'))
                     h.append(('TELFOCUS', t['telescope_focus_um'], '[um] telescope nominal focus'))
+
+                if 'site_latitude' in t:
+                    lat = sexagesimal(math.degrees(t['site_latitude']))
+                    h.append(('SITELAT', lat, 'telescope latitude (north)'))
+                    lon = sexagesimal(math.degrees(t['site_longitude']))
+                    h.append(('SITELONG', lon, 'telescope longitude (east)'))
+                    elevation = round(t['site_elevation'], 1)
+                    h.append(('SITEELEV', elevation, '[m] telescope elevation'))
         except Exception:
             pass
 
