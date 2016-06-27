@@ -419,6 +419,12 @@ class CameraDaemon:
         """Returns a dictionary of the camera-related fits frame headers"""
         rspd = self._horizontal_shift_speeds[self._horizontal_shift_speed_index]
         shutter = 'AUTO' if self._shutter_enabled else  'CLOSED'
+
+        filename = ''
+        if self._output_save_to_disk:
+            filename = self._output_frame_prefix + \
+                '-{:04d}.fits'.format(self._output_frame_number)
+
         return [
             (None, None, None),
             ('COMMENT', ' ---           CAMERA INFORMATION            --- ', ''),
@@ -442,6 +448,8 @@ class CameraDaemon:
                 self._geometry_image_x1, self._geometry_image_x2,
                 self._geometry_image_y1, self._geometry_image_y2),
              '[x1:x2,y1:y2] image region (image coords)'),
+            ('FILESAVE', self._output_save_to_disk, 'Image has been archived to disk'),
+            ('FILENAME', filename, 'Archived image name')
         ]
 
     def __environment_frame_headers(self):
