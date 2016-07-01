@@ -32,15 +32,14 @@ import warwick.observatory as observatory
 
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = 'UNKNOWN'
-INSTRUMENT_ARM = 'BLUE'
-
-if INSTRUMENT_ARM == 'RED':
-    CAMD_DAEMON = observatory.daemons.onemetre_red_camera
-else:
-    CAMD_DAEMON = observatory.daemons.onemetre_blue_camera
 
 SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook
+
+DAEMONS = {
+    'blue': observatory.daemons.onemetre_blue_camera,
+    'red': observatory.daemons.onemetre_red_camera
+}
 
 FMT_GREEN = '\033[92m'
 FMT_RED = '\033[91m'
@@ -93,13 +92,13 @@ GAIN_DESCRIPTIONS = {
     2: '\033[1mLOW\033[0m',
 }
 
-def run_command(command):
+def run_command(daemon, command, args):
     """Prints the message associated with a status code and returns the code"""
     try:
-        ret = command()
+        ret = command(daemon, args)
     except KeyboardInterrupt:
         # ctrl-c terminates the running command
-        ret = stop()
+        ret = stop(daemon, args)
 
         # Report successful stop
         if ret == 0:
@@ -112,11 +111,11 @@ def run_command(command):
         print(STATUS_CODES[ret])
     elif ret != -1 and ret != 0:
         print('Returned unknown status code: {0}'.format(ret))
-    sys.exit(ret)
+    return ret
 
-def status():
+def status(daemon, _):
     """Reports the current camera status"""
-    with CAMD_DAEMON.connect() as camd:
+    with daemon.connect() as camd:
         data = camd.report_status()
 
     state_desc = '\033[1m\033[93mUNKNOWN\033[0m'
@@ -173,30 +172,30 @@ def status():
     print('   Saving is ' + FMT_BOLD + save_status + FMT_CLEAR)
     return 0
 
-def set_temperature(args):
+def set_temperature(daemon, args):
     """Set the camera temperature"""
     if len(args) == 1:
         temp = int(args[0])
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_target_temperature(temp, True)
     print('usage: {} temperature <degrees>'.format(SCRIPT_NAME))
     return -1
 
-def stop_cooler():
+def stop_cooler(daemon, _):
     """Turns off active cooling"""
-    with CAMD_DAEMON.connect() as camd:
+    with daemon.connect() as camd:
         return camd.enable_cooler(False)
 
-def set_exposure(args):
+def set_exposure(daemon, args):
     """Set the camera exposure time"""
     if len(args) == 1:
         exposure = float(args[0])
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_exposure(exposure)
     print('usage: {} exposure <seconds>'.format(SCRIPT_NAME))
     return -1
 
-def set_directory(args):
+def set_directory(daemon, args):
     """Set the output frame directory"""
     if len(args) == 1:
         # Validate path and make it absolute
@@ -204,78 +203,78 @@ def set_directory(args):
             path = str(Path(args[0]).resolve())
         except Exception:
             return 50
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_output_frame_directory(path)
     print('usage: {} dir <output frame directory>'.format(SCRIPT_NAME))
     return -1
 
-def set_prefix(args):
+def set_prefix(daemon, args):
     """Set the output frame filename prefix"""
     if len(args) == 1:
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_output_frame_prefix(args[0])
     print('usage: {} prefix <output frame prefix>'.format(SCRIPT_NAME))
     return -1
 
-def set_frame_number(args):
+def set_frame_number(daemon, args):
     """Set the output frame number"""
     if len(args) == 1:
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_output_frame_number(args[0])
     print('usage: {} frameno <output frame number>'.format(SCRIPT_NAME))
     return -1
 
-def set_gain(args):
+def set_gain(daemon, args):
     """Set the camera gain"""
     if len(args) == 1 and (args[0] == 'high' or args[0] == 'medium' or args[0] == 'low'):
         index = 0 if args[0] == 'high' else 1 if args[0] == 'medium' else 2
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_gain(index)
     print('usage: {} gain [high|medium|low]'.format(SCRIPT_NAME))
     return -1
 
-def set_horizontal_shift_speed(args):
+def set_horizontal_shift_speed(daemon, args):
     """Set the readout / horizontal shift speed"""
     options = ['a', 'b', 'c', 'd']
     if len(args) == 1 and args[0] in options:
         index = options.index(args[0])
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_horizontal_shift(index)
     print('usage: {} readout [a|b|c|d]'.format(SCRIPT_NAME))
     return -1
 
-def set_shutter(args):
+def set_shutter(daemon, args):
     """Set the camera shutter mode"""
     if len(args) == 1 and (args[0] == 'auto' or args[0] == 'dark'):
         enabled = args[0] == 'auto'
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_shutter(enabled)
     print('usage: {} shutter [auto|dark]'.format(SCRIPT_NAME))
     return -1
 
-def set_binning(args):
+def set_binning(daemon, args):
     """Set the camera binning"""
     if len(args) == 1:
         # Assume square pixels
         binning = int(args[0])
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_binning(binning, binning)
     print('usage: {} binning <pixel size>'.format(SCRIPT_NAME))
     return -1
 
-def set_window(args):
+def set_window(daemon, args):
     """Set the camera readout window"""
     if len(args) == 4:
         x = int(args[0])
         y = int(args[1])
         width = int(args[2])
         height = int(args[3])
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_window(x, y, width, height)
     print('usage: {} window <x> <y> <width> <height>'.format(SCRIPT_NAME))
     return -1
 
-def register_preview():
+def register_preview(daemon, _):
     """Open a new ds9 preview window and register it with the server"""
     try:
         # Generate a random name to avoid collisions
@@ -289,7 +288,7 @@ def register_preview():
         address = ds9.access().split(' ')[-1]
 
         # Register access for camd to update the preview
-        command = ['xpaset', '-p', name, '-acl', CAM_HOST, '+']
+        command = ['xpaset', '-p', name, '-acl', daemon.host, '+']
         subprocess.check_call(command, timeout=5)
 
         ds9.set('view filename no')
@@ -306,25 +305,25 @@ def register_preview():
     except Exception:
         print('error: failed to open DS9 preview window')
         return -1
-    with CAMD_DAEMON.connect() as camd:
+    with daemon.connect() as camd:
         return camd.register_preview(address)
 
-def set_save(args):
+def set_save(daemon, args):
     """Enable or disable saving acquired frames to disk"""
     if len(args) == 1 and (args[0] == 'enable' or args[0] == 'disable'):
-        with CAMD_DAEMON.connect() as camd:
+        with daemon.connect() as camd:
             return camd.set_save(args[0] == 'enable')
 
     print('usage: {} save (enable|disable)'.format(SCRIPT_NAME))
     return -1
 
-def start(args):
+def start(daemon, args):
     """Starts an exposure sequence"""
     if len(args) == 1:
         try:
             count = 0 if args[0] == 'continuous' else int(args[0])
             if args[0] == 'continuous' or count > 0:
-                with CAMD_DAEMON.connect() as camd:
+                with daemon.connect() as camd:
                     return camd.start_sequence(count)
         except Exception:
             print('error: invalid exposure count:', args[0])
@@ -332,31 +331,31 @@ def start(args):
     print('usage: {} start (continuous|<count>)'.format(SCRIPT_NAME))
     return -1
 
-def stop():
+def stop(daemon, _):
     """Stops any active camera exposures"""
-    with CAMD_DAEMON.connect() as camd:
+    with daemon.connect() as camd:
         return camd.stop_sequence()
 
-def initialize():
+def initialize(daemon, _):
     """Enables the camera driver"""
     # Initialization can take more than 5 sec, so bump timeout to 10.
-    with CAMD_DAEMON.connect(10) as camd:
+    with daemon.connect(10) as camd:
         return camd.initialize()
 
-def shutdown():
+def shutdown(daemon, _):
     """Disables the camera drivers"""
-    with CAMD_DAEMON.connect() as camd:
+    with daemon.connect() as camd:
         return camd.shutdown()
 
-def reboot():
+def reboot(daemon, _):
     """Reboots the camera driver"""
-    shutdown()
+    shutdown(daemon, _)
     time.sleep(5)
-    return initialize()
+    return initialize(daemon, _)
 
 def print_usage():
     """Prints the utility help"""
-    print('usage: {} <command> [<args>]'.format(SCRIPT_NAME))
+    print('usage: {} (blue|red) <command> [<args>]'.format(SCRIPT_NAME))
     print()
     print('general commands:')
     print('   status       print a human-readable summary of the camera status')
@@ -384,47 +383,33 @@ def print_usage():
     return 0
 
 if __name__ == '__main__':
-    if len(sys.argv) == 1:
+    if len(sys.argv) < 3:
         sys.exit(print_usage())
 
-    if sys.argv[1] == 'cooleroff':
-        run_command(stop_cooler)
-    if sys.argv[1] == 'temperature':
-        run_command(lambda: set_temperature(sys.argv[2:]))
-    if sys.argv[1] == 'exposure':
-        run_command(lambda: set_exposure(sys.argv[2:]))
-    if sys.argv[1] == 'dir':
-        run_command(lambda: set_directory(sys.argv[2:]))
-    if sys.argv[1] == 'prefix':
-        run_command(lambda: set_prefix(sys.argv[2:]))
-    if sys.argv[1] == 'frameno':
-        run_command(lambda: set_frame_number(sys.argv[2:]))
-    if sys.argv[1] == 'shutter':
-        run_command(lambda: set_shutter(sys.argv[2:]))
-    if sys.argv[1] == 'gain':
-        run_command(lambda: set_gain(sys.argv[2:]))
-    if sys.argv[1] == 'readout':
-        run_command(lambda: set_horizontal_shift_speed(sys.argv[2:]))
-    if sys.argv[1] == 'bin':
-        run_command(lambda: set_binning(sys.argv[2:]))
-    if sys.argv[1] == 'window':
-        run_command(lambda: set_window(sys.argv[2:]))
-    if sys.argv[1] == 'status':
-        run_command(status)
-    if sys.argv[1] == 'preview':
-        run_command(register_preview)
-    if sys.argv[1] == 'save':
-        run_command(lambda: set_save(sys.argv[2:]))
-    if sys.argv[1] == 'start':
-        run_command(lambda: start(sys.argv[2:]))
-    if sys.argv[1] == 'stop':
-        run_command(stop)
-    if sys.argv[1] == 'init':
-        run_command(initialize)
-    if sys.argv[1] == 'kill':
-        run_command(shutdown)
-    if sys.argv[1] == 'reboot':
-        run_command(reboot)
+    commands = {
+        'cooleroff': stop_cooler,
+        'temperature': set_temperature,
+        'exposure': set_exposure,
+        'dir': set_directory,
+        'prefix': set_prefix,
+        'frameno': set_frame_number,
+        'shutter': set_shutter,
+        'gain': set_gain,
+        'readout': set_horizontal_shift_speed,
+        'bin': set_binning,
+        'window': set_window,
+        'status': status,
+        'preview': register_preview,
+        'save': set_save,
+        'start': start,
+        'stop': stop,
+        'init': initialize,
+        'kill': shutdown,
+        'reboot': reboot
+    }
 
-    # Command not found
-    sys.exit(print_usage())
+    if sys.argv[1] not in DAEMONS or sys.argv[2] not in commands:
+        sys.exit(print_usage())
+
+    sys.exit(run_command(DAEMONS[sys.argv[1]], commands[sys.argv[2]], sys.argv[3:]))
+

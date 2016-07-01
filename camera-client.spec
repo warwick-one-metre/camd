@@ -1,5 +1,5 @@
-Name:      onemetre-{CAMERA}-camera-client
-Version:   1.5
+Name:      onemetre-camera-client
+Version:   1.6
 Release:   0
 Url:       https://github.com/warwick-one-metre/camd
 Summary:   Camera control client for the Warwick one-metre telescope.
@@ -11,17 +11,17 @@ Requires:  python3, python3-Pyro4, python3-pyds9, python3-warwickobservatory
 %description
 Part of the observatory software for the Warwick one-meter telescope.
 
-{CAMERA} is a commandline utility for controlling the {CAMERA} camera.
+cam is a commandline utility for controlling the red and blue cameras.
 
 %build
 mkdir -p %{buildroot}%{_bindir}
 mkdir -p %{buildroot}/etc/bash_completion.d
-%{__install} %{_sourcedir}/{CAMERA} %{buildroot}%{_bindir}
-%{__install} %{_sourcedir}/completion/{CAMERA} %{buildroot}/etc/bash_completion.d/{CAMERA}
+%{__install} %{_sourcedir}/cam %{buildroot}%{_bindir}
+%{__install} %{_sourcedir}/completion/cam %{buildroot}/etc/bash_completion.d/cam
 
 %files
 %defattr(0755,root,root,-)
-%{_bindir}/{CAMERA}
-/etc/bash_completion.d/{CAMERA}
+%{_bindir}/cam
+/etc/bash_completion.d/cam
 
 %changelog

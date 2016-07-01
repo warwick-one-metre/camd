@@ -1,13 +1,19 @@
-_{CAMERA}()
+_cam()
 {
     compopt +o default
     local cur prev opts
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="status preview save exposure dir prefix frameno shutter gain readout bin window start init temperature cooleroff kill reboot"
+    opts="red blue"
 
     case "${prev}" in
+        blue)
+            opts="status preview save exposure dir prefix frameno shutter gain readout bin window start init temperature cooleroff kill reboot"
+            ;;
+        red)
+            opts="status preview save exposure dir prefix frameno shutter gain readout bin window start init temperature cooleroff kill reboot"
+            ;;
         gain)
             opts="high medium low"
             ;;
@@ -37,4 +43,4 @@ _{CAMERA}()
     return 0
 }
 
-complete -F _{CAMERA} {CAMERA}
+complete -F _cam cam

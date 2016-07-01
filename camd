@@ -25,6 +25,7 @@
 # pylint: disable=broad-except
 # pylint: disable=too-many-lines
 
+import argparse
 from ctypes import c_float, c_int32, c_int, c_uint16, c_long, byref, create_string_buffer, CDLL
 import datetime
 import math
@@ -43,34 +44,42 @@ import warwick.observatory.helpers as helpers
 from warwick.observatory import TryLock
 
 # Set automatically when generating RPM package
-SOFTWARE_VERSION = 'UNKNOWN'
-INSTRUMENT_ARM = 'BLUE'
+SOFTWARE_VERSION = "1.8 (git-3921e3a)"
 
-if INSTRUMENT_ARM == 'RED':
-    DEFAULT_TEMPERATURE = -60
-    CAMERA_SERIAL = 12723
-    CAMD_DAEMON = observatory.daemons.onemetre_red_camera
-    LOG_TABLE = 'redd'
-    PRESCAN_COLUMNS = 20
-    POSTSCAN_COLUMNS = 20
-    ARM_FILTER = 'Z'
-else:
-    DEFAULT_TEMPERATURE = -30
-    CAMERA_SERIAL = 11575
-    LOG_TABLE = 'blued'
-    CAMD_DAEMON = observatory.daemons.onemetre_blue_camera
-    PRESCAN_COLUMNS = 0
-    POSTSCAN_COLUMNS = 0
-    ARM_FILTER = 'BG40'
-
-DEFAULT_OUTPUT_PATH = '/home/saft/OBS_DATA'
-DEFAULT_FRAME_PREFIX = 'junk'
-DEFAULT_EXPOSURE_TIME = 1.0
-DEFAULT_GAIN_INDEX = 0
-DEFAULT_HORIZONTAL_SHIFT_INDEX = 2
-
-LATEST_FRAME_PATH = '/var/tmp/latest-'+INSTRUMENT_ARM+'.fits'
-LATEST_FRAME_TEMP_PATH = '/var/tmp/_latest-'+INSTRUMENT_ARM+'.fits'
+CONFIG = {
+    'blue': {
+        'daemon': observatory.daemons.onemetre_blue_camera,
+        'serial': 11575,
+        'temperature': -30,
+        'gainindex': 0,
+        'exposure': 1,
+        'horizontalshiftindex': 2,
+        'overscan': (0, 0),
+        'logtable': 'blue_camd',
+        'arm': 'BLUE',
+        'filter': 'BG40',
+        'outputpath': '/home/saft/OBS_DATA',
+        'outputprefix': 'junk-red',
+        'framepath': '/var/tmp/latest-BLUE.fits',
+        'temppath': '/var/tmp/_latest-BLUE.fits',
+    },
+    'red': {
+        'daemon': observatory.daemons.onemetre_red_camera,
+        'serial': 12723,
+        'temperature': -60,
+        'gainindex': 0,
+        'exposure': 1,
+        'horizontalshiftindex': 2,
+        'overscan': (20, 20),
+        'logtable': 'red_camd',
+        'arm': 'RED',
+        'filter': 'Z',
+        'outputpath': '/home/saft/OBS_DATA',
+        'outputprefix': 'junk-red',
+        'framepath': '/var/tmp/latest-RED.fits',
+        'temppath': '/var/tmp/_latest-RED.fits',
+    }
+}
 
 # Metadata daemons are expected to be well behaved, so a very short timeout is used
 # to avoid stalling the frame saving process (missing metadata is preferrable to being late)
@@ -130,9 +139,13 @@ class AndorStatus:
 
 class CameraDaemon:
     """Daemon interface for andor camera"""
-    def __init__(self, log_table):
+    def __init__(self, config):
         self._status = CameraStatus.Disabled
-        self._log_table = log_table
+        self._log_table = config['logtable']
+        self._latest_frame_path = config['framepath']
+        self._temp_frame_path = config['temppath']
+        self._arm_name = config['arm']
+        self._filter_name = config['filter']
 
         self._driver = None
         self._driver_lock = threading.Lock()
@@ -140,14 +153,13 @@ class CameraDaemon:
         self._status_condition = threading.Condition()
         self._command_lock = threading.Lock()
 
-        # Camera data: loaded during init
+        self._camera_serial = config['serial']
         self._camera_model = 'unknown'
-        self._camera_serial = 0
 
         self._temperature = 0
         self._temperature_locked = False
         self._cooler_enabled = False
-        self._target_temperature = DEFAULT_TEMPERATURE
+        self._target_temperature = config['temperature']
 
         # Temperature limits: loaded during init
         self._min_temperature = 0
@@ -166,6 +178,7 @@ class CameraDaemon:
         self._geometry_height = 0
 
         # Image geometry: masking away the overscan on the red camera
+        self._overscan = config['overscan']
         self._geometry_image_x1 = 0
         self._geometry_image_x2 = 0
         self._geometry_image_y1 = 0
@@ -176,12 +189,12 @@ class CameraDaemon:
 
         # Gain index. For blue camera: 0 = 1x, 1 = 2x, 2 = 4x
         self._gains = []
-        self._gain_index = DEFAULT_GAIN_INDEX
-        self._exposure_time = DEFAULT_EXPOSURE_TIME
+        self._gain_index = config['gainindex']
+        self._exposure_time = config['exposure']
 
         # Horizontal shift speeds in MHz: loaded during init
         self._horizontal_shift_speeds = []
-        self._horizontal_shift_speed_index = DEFAULT_HORIZONTAL_SHIFT_INDEX
+        self._horizontal_shift_speed_index = config['horizontalshiftindex']
 
         # Limit and number of frames acquired during the next sequence
         # Set to 0 to run continuously
@@ -194,8 +207,8 @@ class CameraDaemon:
         self._sequence_exposure_start_time = datetime.datetime.utcnow()
 
         # Information for building the output filename
-        self._output_directory = pathlib.Path(DEFAULT_OUTPUT_PATH)
-        self._output_frame_prefix = DEFAULT_FRAME_PREFIX
+        self._output_directory = pathlib.Path(config['outputpath'])
+        self._output_frame_prefix = config['outputprefix']
         self._output_frame_number = 0
 
         self._output_save_to_disk = False
@@ -271,12 +284,13 @@ class CameraDaemon:
                     # try/catch
                     try:
                         # Mimic an atomic save by writing to a temporary file and then moving
-                        hdu.writeto(LATEST_FRAME_TEMP_PATH, clobber=True)
-                        shutil.move(LATEST_FRAME_TEMP_PATH, LATEST_FRAME_PATH)
+                        hdu.writeto(self._temp_frame_path, clobber=True)
+                        shutil.move(self._temp_frame_path, self._latest_frame_path)
                         try:
                             pipeline = observatory.daemons.onemetre_pipeline
                             with pipeline.connect(PYRO_COMM_TIMEOUT) as pipeline:
-                                pipeline.notify_latest_frame(INSTRUMENT_ARM, LATEST_FRAME_PATH)
+                                pipeline.notify_latest_frame(self._arm_name,
+                                                             self._latest_frame_path)
                         except Exception as e:
                             print('save thread: failed to notify latest frame with error ' + str(e))
                             observatory.log.error(self._log_table, 'Failed to notify pipeline (' \
@@ -288,14 +302,14 @@ class CameraDaemon:
                             filename = self._output_frame_prefix + \
                                 '-{:04d}.fits'.format(self._output_frame_number)
                             path = str(self._output_directory / filename)
-                            shutil.copy(LATEST_FRAME_PATH, path)
+                            shutil.copy(self._latest_frame_path, path)
                             observatory.log.info(self._log_table, 'Saved frame ' + filename)
                             self._output_frame_number += 1
 
                             try:
                                 pipeline = observatory.daemons.onemetre_pipeline
                                 with pipeline.connect(PYRO_COMM_TIMEOUT) as pipeline:
-                                    pipeline.notify_saved_frame(INSTRUMENT_ARM, path)
+                                    pipeline.notify_saved_frame(self._arm_name, path)
                             except Exception as e:
                                 print('save thread: failed to notify frame with error ' + str(e))
                                 observatory.log.error(self._log_table,
@@ -408,8 +422,8 @@ class CameraDaemon:
             ('CAMSWVER', SOFTWARE_VERSION, 'camera server software version'),
             ('CAMERA', self._camera_model + ' ({})'.format(self._camera_serial),
              'camera model and serial number'),
-            ('INSTRARM', INSTRUMENT_ARM, 'red or blue arm of the instrument'),
-            ('FILTER', ARM_FILTER, 'filter installed in instrument arm'),
+            ('INSTRARM', self._arm_name, 'red or blue arm of the instrument'),
+            ('FILTER', self._filter_name, 'filter installed in instrument arm'),
             ('CCD-TEMP', round(self._temperature, 2), '[deg c] CCD temperature at end of exposure'),
             ('SET-TEMP', self._target_temperature, '[deg c] CCD temperature set point'),
             ('TEMP-LCK', self._temperature_locked, 'CCD temperature is locked to set point'),
@@ -718,7 +732,7 @@ class CameraDaemon:
                     print('camera {} is {} ({})'.format(i, model.value.decode('ascii'),
                                                         serial.value))
 
-                    if serial.value == CAMERA_SERIAL:
+                    if serial.value == self._camera_serial:
                         found = True
                         break
                     else:
@@ -726,7 +740,7 @@ class CameraDaemon:
 
                 if not found:
                     driver = None
-                    print('camera with serial {} was not found'.format(CAMERA_SERIAL))
+                    print('camera with serial {} was not found'.format(self._camera_serial))
                     return CommandStatus.CameraNotFound
 
                 # Query cooler temperature limits
@@ -841,7 +855,6 @@ class CameraDaemon:
                 with self._driver_lock:
                     self._driver = driver
                     self._camera_model = model.value.decode('ascii')
-                    self._camera_serial = serial.value
                     self._min_temperature = min_temp.value
                     self._max_temperature = max_temp.value
                     self._ccd_width = width.value
@@ -853,8 +866,8 @@ class CameraDaemon:
                     self._geometry_width = self._ccd_width
                     self._geometry_height = self._ccd_height
 
-                    self._geometry_image_x1 = 1 + PRESCAN_COLUMNS
-                    self._geometry_image_x2 = self._ccd_width - POSTSCAN_COLUMNS
+                    self._geometry_image_x1 = 1 + self._overscan[0]
+                    self._geometry_image_x2 = self._ccd_width - self._overscan[1]
                     self._geometry_image_y1 = 1
                     self._geometry_image_y2 = self._ccd_height
 
@@ -1084,8 +1097,8 @@ class CameraDaemon:
             self._geometry_height = height
 
             # Round prescan and postscan up to nearest superpixel to avoid bleeding
-            prescan = int((PRESCAN_COLUMNS + bin_x - 1) / bin_x)
-            postscan = int((POSTSCAN_COLUMNS + bin_x - 1) / bin_x)
+            prescan = int((self._overscan[0] + bin_x - 1) / bin_x)
+            postscan = int((self._overscan[1] + bin_x - 1) / bin_x)
 
             # Work out how much pre/post scan columns are left in the requested window
             window_x = int((x - 1) / bin_x)
@@ -1227,5 +1240,10 @@ class CameraDaemon:
         return CommandStatus.Succeeded
 
 if __name__ == '__main__':
-    CAMD_DAEMON.launch(CameraDaemon(LOG_TABLE))
+    description = 'Camera control daemon'
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('camera', choices=['blue', 'red'], help='Select a camera')
+    args = parser.parse_args()
+    cam_config = CONFIG[args.camera]
+    cam_config['daemon'].launch(CameraDaemon(cam_config))
 
