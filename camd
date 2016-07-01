@@ -723,7 +723,7 @@ class CameraDaemon:
                 if not found:
                     driver = None
                     print('camera with serial {} was not found'.format(CAMERA_SERIAL))
-                    return CommandStatus.Failed
+                    return CommandStatus.CameraNotFound
 
                 # Query cooler temperature limits
                 min_temp = c_int(self._min_temperature)

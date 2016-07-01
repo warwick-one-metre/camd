@@ -53,6 +53,8 @@ STATUS_CODES = {
     1: 'error: command failed',
     2: 'error: another command is already running',
 
+    5: 'error: camera hardware not found',
+
     # Command-specific codes
     10: 'error: camera has not been initialized',
     11: 'error: camera is not idle',
