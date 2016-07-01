@@ -60,6 +60,7 @@ STATUS_CODES = {
     11: 'error: camera is not idle',
     14: 'error: camera has already been initialized',
     15: 'error: camera is not acquiring',
+    16: 'error: cannot change output path while an exposure sequence is saving',
     20: 'error: requested temperature is outside the supported limits',
 
     # Readout geometry

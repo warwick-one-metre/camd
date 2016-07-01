@@ -94,6 +94,7 @@ class CommandStatus:
     CameraNotIdle = 11
     CameraNotUninitialized = 14
     CameraNotAcquiring = 15
+    CameraAcquiringAndSaving = 16
 
     TemperatureOutsideLimits = 20
     BinningIncompatibleWithWindow = 30
@@ -885,7 +886,9 @@ class CameraDaemon:
             if not success:
                 return CommandStatus.Blocked
 
-            # TODO: Only allow if saving is disabled
+            # Prevent changes to the output path in the middle of a sequence
+            if self._status > CameraStatus.Idle and self._output_save_to_disk:
+                return CommandStatus.CameraAcquiringAndSaving
 
             # Check that the directory exists and is writable
             try:
@@ -906,7 +909,10 @@ class CameraDaemon:
             if not success:
                 return CommandStatus.Blocked
 
-            # TODO: Only allow if saving is disabled
+            # Prevent changes to the output path in the middle of a sequence
+            if self._status > CameraStatus.Idle and self._output_save_to_disk:
+                return CommandStatus.CameraAcquiringAndSaving
+
             self._output_frame_prefix = prefix
 
             observatory.log.info(self._log_table, 'Frame prefix set to ' + prefix)
@@ -949,7 +955,10 @@ class CameraDaemon:
             if not success:
                 return CommandStatus.Blocked
 
-            # TODO: Only allow if saving is disabled
+            # Prevent changes to the output path in the middle of a sequence
+            if self._status > CameraStatus.Idle and self._output_save_to_disk:
+                return CommandStatus.CameraAcquiringAndSaving
+
             self._output_frame_number = int(number)
 
             observatory.log.info(self._log_table, 'Frame number set to ' + str(number))
