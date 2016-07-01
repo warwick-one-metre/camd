@@ -50,11 +50,13 @@ if INSTRUMENT_ARM == 'RED':
     DEFAULT_TEMPERATURE = -60
     CAMERA_SERIAL = 12723
     CAMD_DAEMON = observatory.daemons.onemetre_red_camera
+    LOG_TABLE = 'redd'
     PRESCAN_COLUMNS = 20
     POSTSCAN_COLUMNS = 20
 else:
     DEFAULT_TEMPERATURE = -30
     CAMERA_SERIAL = 11575
+    LOG_TABLE = 'blued'
     CAMD_DAEMON = observatory.daemons.onemetre_blue_camera
     PRESCAN_COLUMNS = 0
     POSTSCAN_COLUMNS = 0
@@ -124,9 +126,10 @@ class AndorStatus:
     DrvP6Invalid = 20077
 
 class CameraDaemon:
-    """Daemon interface for talon subystems"""
-    def __init__(self):
+    """Daemon interface for andor camera"""
+    def __init__(self, log_table):
         self._status = CameraStatus.Disabled
+        self._log_table = log_table
 
         self._driver = None
         self._driver_lock = threading.Lock()
@@ -273,6 +276,9 @@ class CameraDaemon:
                                 pipeline.notify_latest_frame(INSTRUMENT_ARM, LATEST_FRAME_PATH)
                         except Exception as e:
                             print('save thread: failed to notify latest frame with error ' + str(e))
+                            observatory.log.error(self._log_table, 'Failed to notify pipeline (' \
+                                                  + str(e) + ')')
+
                         # Compressing the frame can take a surprising amount of time (~10 sec!), so
                         # we save uncompressed, and run a compression pass at the end of the night.
                         if self._output_save_to_disk:
@@ -280,6 +286,7 @@ class CameraDaemon:
                                 '-{:04d}.fits'.format(self._output_frame_number)
                             path = str(self._output_directory / filename)
                             shutil.copy(LATEST_FRAME_PATH, path)
+                            observatory.log.info(self._log_table, 'Saved frame ' + filename)
                             self._output_frame_number += 1
 
                             try:
@@ -288,9 +295,12 @@ class CameraDaemon:
                                     pipeline.notify_saved_frame(INSTRUMENT_ARM, path)
                             except Exception as e:
                                 print('save thread: failed to notify frame with error ' + str(e))
+                                observatory.log.error(self._log_table,
+                                                      'Failed to notify pipeline (' + str(e) + ')')
                     except Exception as e:
                         print('save thread: swallowing error ' + str(e))
-
+                        observatory.log.error(self._log_table, 'Failed to save frame (' \
+                                                  + str(e) + ')')
                     # Update previews
                     # Enumerate over a copy so we can remove dead servers from the original
                     if len(self._ds9_preview_addresses) > 0:
@@ -304,6 +314,8 @@ class CameraDaemon:
                         self.__update_previews(hdulist)
                 except Exception as e:
                     print('save thread: swallowing error ' + str(e))
+                    observatory.log.error(self._log_table, 'Failed to update frame previews (' \
+                                          + str(e) + ')')
 
     def __update_previews(self, hdulist=None, xpa_messages=None, unregister_on_error=True):
         """Update registered preview clients with new data
@@ -346,11 +358,11 @@ class CameraDaemon:
                     while harad < -math.pi:
                         harad += 2*math.pi
 
-                    ra = sexagesimal(t['ra'] * 12 / math.pi)
+                    ra = helpers.sexagesimal(t['ra'] * 12 / math.pi)
                     h.append(('TELRA', ra, 'telescope nominal J2000 RA'))
-                    dec = sexagesimal(math.degrees(t['dec']))
+                    dec = helpers.sexagesimal(math.degrees(t['dec']))
                     h.append(('TELDEC', dec, 'telescope nominal J2000 Dec'))
-                    ha = sexagesimal(harad * 12 / math.pi)
+                    ha = helpers.sexagesimal(harad * 12 / math.pi)
                     h.append(('TELHA', ha, 'telescope nominal HA'))
                     rad = round(math.degrees(t['ra']), 3)
                     h.append(('TELRAD', rad, '[deg] telescope nominal J2000 RA'))
@@ -365,14 +377,15 @@ class CameraDaemon:
                     h.append(('TELFOCUS', t['telescope_focus_um'], '[um] telescope nominal focus'))
 
                 if 'site_latitude' in t:
-                    lat = sexagesimal(math.degrees(t['site_latitude']))
+                    lat = helpers.sexagesimal(math.degrees(t['site_latitude']))
                     h.append(('SITELAT', lat, 'telescope latitude (north)'))
-                    lon = sexagesimal(math.degrees(t['site_longitude']))
+                    lon = helpers.sexagesimal(math.degrees(t['site_longitude']))
                     h.append(('SITELONG', lon, 'telescope longitude (east)'))
                     elevation = round(t['site_elevation'], 1)
                     h.append(('SITEELEV', elevation, '[m] telescope elevation'))
-        except Exception:
-            pass
+        except Exception as e:
+            observatory.log.error(self._log_table, 'Failed to query telescope metadata (' \
+                                  + str(e) + ')')
 
         return h
 
@@ -435,8 +448,9 @@ class CameraDaemon:
                     h.append(('VEXTHUMD', v['relative_humidity'], '[%] vaisala external humidity'))
                 if v is not None and v['pressure_valid']:
                     h.append(('VPRESSUR', v['pressure'], '[hPa] vaisala air pressure'))
-        except Exception:
-            pass
+        except Exception as e:
+            observatory.log.error(self._log_table, 'Failed to query vaisala metadata (' \
+                                  + str(e) + ')')
         try:
             with observatory.daemons.onemetre_roomalert.connect(PYRO_COMM_TIMEOUT) as roomalert:
                 r = roomalert.last_measurement()
@@ -446,20 +460,22 @@ class CameraDaemon:
                     h.append(('DOMETEMP', r['internal_temp'], '[deg c] dome temperature'))
                     h.append(('DOMEHUMD', r['internal_humidity'], '[%] dome humidity'))
                     h.append(('TRUSTEMP', r['truss_temp'], '[deg c] truss temperature'))
-        except Exception:
-            pass
+        except Exception as e:
+            observatory.log.error(self._log_table, 'Failed to query roomalert metadata (' \
+                                  + str(e) + ')')
 
         try:
-            with observatory.daemons.superwasp_log.connect() as superwasp:
-                s = superwasp.last_measurement(PYRO_COMM_TIMEOUT)
+            with observatory.daemons.superwasp_log.connect(PYRO_COMM_TIMEOUT) as superwasp:
+                s = superwasp.last_measurement()
                 if s is not None:
                     h.append(('SWSWVER', s['software_version'],
                               'superwasp monitor server software version'))
                     h.append(('SKYTEMP', s['sky_temp'], '[deg c] sky temperature'))
                     h.append(('DEWPDELT', s['dew_point_delta'],
                               '[deg c] temperature above dew point'))
-        except Exception:
-            pass
+        except Exception as e:
+            observatory.log.error(self._log_table, 'Failed to query superwasp metadata (' \
+                                  + str(e) + ')')
 
         return h
 
@@ -497,6 +513,8 @@ class CameraDaemon:
                 if status != AndorStatus.Success:
                     print('exposure sequence: failed to start acquisition with status ' + \
                           str(status))
+                    observatory.log.error(self._log_table, 'Failed to start exposure sequence (' \
+                                  + str(status) + ')')
                     break
 
                 self._sequence_exposure_start_time = start_time
@@ -505,6 +523,8 @@ class CameraDaemon:
                 status = self._driver.WaitForAcquisition()
                 if status != AndorStatus.Success:
                     print('exposure sequence: waiting failed with status ' + str(status))
+                    observatory.log.error(self._log_table, 'Failed to wait for acquisition (' \
+                                  + str(status) + ')')
                     break
 
                 end_time = datetime.datetime.utcnow()
@@ -513,6 +533,8 @@ class CameraDaemon:
                 if status != AndorStatus.Success:
                     print('exposure sequence: failed to get acquired data with status ' + \
                           str(status))
+                    observatory.log.error(self._log_table, 'Failed to query frame data (' \
+                                  + str(status) + ')')
                     break
 
                 # Build metadata list
@@ -545,6 +567,7 @@ class CameraDaemon:
                     self._stop_acquisition = True
         finally:
             print('exposure sequence: complete')
+            observatory.log.info(self._log_table, 'Exposure sequence complete')
             self._status = CameraStatus.Idle
 
     @Pyro4.expose
@@ -566,6 +589,7 @@ class CameraDaemon:
             if not self.__set_target_temperature_and_cooler(temperature, enable_cooler):
                 return CommandStatus.Failed
 
+            observatory.log.info(self._log_table, 'Target temperature set to ' + str(temperature))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -581,6 +605,8 @@ class CameraDaemon:
             if not self.__set_target_temperature_and_cooler(self._target_temperature, enabled):
                 return CommandStatus.Failed
 
+            observatory.log.info(self._log_table, 'Cooler ' \
+                                 + ('enabled' if enabled else 'disabled'))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -841,6 +867,9 @@ class CameraDaemon:
                     if driver is not None:
                         driver.ShutDown()
                     self._status = CameraStatus.Disabled
+                    observatory.log.error(self._log_table, 'Failed to initialize camera')
+                else:
+                    observatory.log.info(self._log_table, 'Initialized camera')
     # pylint: enable=too-many-return-statements
     # pylint: enable=too-many-branches
     # pylint: enable=too-many-statements
@@ -863,6 +892,8 @@ class CameraDaemon:
                 testfile.close()
             except Exception:
                 return CommandStatus.DirectoryNotWritable
+
+            observatory.log.info(self._log_table, 'Frame directory set to ' + str(path))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -875,6 +906,7 @@ class CameraDaemon:
             # TODO: Only allow if saving is disabled
             self._output_frame_prefix = prefix
 
+            observatory.log.info(self._log_table, 'Frame prefix set to ' + prefix)
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -885,7 +917,8 @@ class CameraDaemon:
                 return CommandStatus.Blocked
 
             self._output_save_to_disk = enabled
-
+            observatory.log.info(self._log_table, 'Frame saving ' \
+                                 + ('enabled' if enabled else 'disabled'))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -916,6 +949,7 @@ class CameraDaemon:
             # TODO: Only allow if saving is disabled
             self._output_frame_number = int(number)
 
+            observatory.log.info(self._log_table, 'Frame number set to ' + str(number))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -940,6 +974,8 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._shutter_enabled = enabled
 
+            observatory.log.info(self._log_table, 'Shutter set to ' \
+                                 + 'auto' if enabled else 'closed')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -964,6 +1000,7 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._gain_index = gain_index
 
+            observatory.log.info(self._log_table, 'Gain index set to ' + str(gain_index))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -989,6 +1026,8 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._horizontal_shift_speed_index = shift_speed_index
 
+            observatory.log.info(self._log_table, 'Readout speed index set to ' \
+                                 + str(shift_speed_index))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -1011,6 +1050,7 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._exposure_time = seconds
 
+            observatory.log.info(self._log_table, 'Exposure time set to ' + str(seconds) + 's')
             return CommandStatus.Succeeded
 
     def __set_ccd_geometry(self, bin_x, bin_y, x, y, width, height):
@@ -1067,6 +1107,7 @@ class CameraDaemon:
                                            self._geometry_width, self._geometry_height):
                 return CommandStatus.BinningIncompatibleWithWindow
 
+            observatory.log.info(self._log_table, 'Binning set to ' + str(bin_x) + 'x' + str(bin_y))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -1090,6 +1131,9 @@ class CameraDaemon:
                                            width, height):
                 return CommandStatus.WindowIncompatibleWithBinning
 
+            region = '[' + str(x) + ':' + str(x + width - 1) + ',' + str(y) + ':' \
+                     + str(y + height - 1) + ']'
+            observatory.log.info(self._log_table, 'Window set to ' + region)
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -1116,6 +1160,7 @@ class CameraDaemon:
                 self._driver.ShutDown()
                 self._driver = None
 
+            observatory.log.info(self._log_table, 'Shutdown camera')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -1132,6 +1177,13 @@ class CameraDaemon:
                 return CommandStatus.CameraNotIdle
 
             print('starting exposure sequence')
+            count_msg = 'until stopped'
+            if count == 1:
+                count_msg = '1 frame'
+            elif count > 1:
+                count_msg = str(count) + ' frames'
+
+            observatory.log.info(self._log_table, 'Starting exposure sequence (' + count_msg + ')')
             self._sequence_frame_limit = count
             self._sequence_frame_count = 0
             self._stop_acquisition = False
@@ -1153,6 +1205,7 @@ class CameraDaemon:
 
         self._status = CameraStatus.Aborting
         print('aborting exposure sequence')
+        observatory.log.info(self._log_table, 'Aborting exposure sequence')
         with self._driver_lock:
             self._driver.AbortAcquisition()
 
@@ -1162,5 +1215,5 @@ class CameraDaemon:
         return CommandStatus.Succeeded
 
 if __name__ == '__main__':
-    CAMD_DAEMON.launch(CameraDaemon())
+    CAMD_DAEMON.launch(CameraDaemon(LOG_TABLE))
 
