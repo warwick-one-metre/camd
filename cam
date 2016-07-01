@@ -336,7 +336,8 @@ def stop():
 
 def initialize():
     """Enables the camera driver"""
-    with CAMD_DAEMON.connect() as camd:
+    # Initialization can take more than 5 sec, so bump timeout to 10.
+    with CAMD_DAEMON.connect(10) as camd:
         return camd.initialize()
 
 def shutdown():
