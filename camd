@@ -38,24 +38,24 @@ from astropy.io import fits
 import numpy
 import pyds9
 import Pyro4
+import warwick.observatory as observatory
+import warwick.observatory.helpers as helpers
+from warwick.observatory import TryLock
 
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = 'UNKNOWN'
 INSTRUMENT_ARM = 'BLUE'
 
-CAMD_HOST = '192.168.0.101'
 if INSTRUMENT_ARM == 'RED':
     DEFAULT_TEMPERATURE = -60
     CAMERA_SERIAL = 12723
-    CAMD_PORT = 9010
-    CAMD_NAME = 'red_camera_daemon'
+    CAMD_DAEMON = observatory.daemons.onemetre_red_camera
     PRESCAN_COLUMNS = 20
     POSTSCAN_COLUMNS = 20
 else:
     DEFAULT_TEMPERATURE = -30
     CAMERA_SERIAL = 11575
-    CAMD_PORT = 9011
-    CAMD_NAME = 'blue_camera_daemon'
+    CAMD_DAEMON = observatory.daemons.onemetre_blue_camera
     PRESCAN_COLUMNS = 0
     POSTSCAN_COLUMNS = 0
 
@@ -71,32 +71,6 @@ LATEST_FRAME_TEMP_PATH = '/var/tmp/_latest-'+INSTRUMENT_ARM+'.fits'
 # Metadata daemons are expected to be well behaved, so a very short timeout is used
 # to avoid stalling the frame saving process (missing metadata is preferrable to being late)
 PYRO_COMM_TIMEOUT = 1
-
-TELD_HOST = '192.168.0.101'
-TELD_PORT = 9003
-TELD_NAME = 'telescope_daemon'
-
-VAISALA_HOST = '192.168.0.102'
-VAISALA_PORT = 9001
-VAISALA_NAME = 'onemetre_vaisala_daemon'
-
-ROOMALERT_HOST = '192.168.0.102'
-ROOMALERT_PORT = 9008
-ROOMALERT_NAME = 'onemetre_roomalert_daemon'
-
-SUPERWASP_HOST = '192.168.0.102'
-SUPERWASP_PORT = 9007
-SUPERWASP_NAME = 'superwasp_daemon'
-
-PIPELINE_HOST = '192.168.0.101'
-PIPELINE_PORT = 9012
-PIPELINE_NAME = 'pipeline_daemon'
-
-TELD_URL = 'PYRO:' + TELD_NAME + '@' + TELD_HOST + ':' + str(TELD_PORT)
-VAISALA_URL = 'PYRO:' + VAISALA_NAME + '@' + VAISALA_HOST + ':' + str(VAISALA_PORT)
-ROOMALERT_URL = 'PYRO:' + ROOMALERT_NAME + '@' + ROOMALERT_HOST + ':' + str(ROOMALERT_PORT)
-SUPERWASP_URL = 'PYRO:' + SUPERWASP_NAME + '@' + SUPERWASP_HOST + ':' + str(SUPERWASP_PORT)
-PIPELINE_URL = 'PYRO:' + PIPELINE_NAME + '@' + PIPELINE_HOST + ':' + str(PIPELINE_PORT)
 
 # Delay between camera state queries (in seconds)
 STATUS_QUERY_DELAY = 1
@@ -148,21 +122,6 @@ class AndorStatus:
     DrvP4Invalid = 20069
     DrvP5Invalid = 20076
     DrvP6Invalid = 20077
-
-class TryLock(object):
-    """Helper object for use with `with` statements"""
-    def __init__(self, lock):
-        self._lock = lock
-        self._locked = False
-
-    def __enter__(self):
-        self._locked = self._lock.acquire(False)
-        return self._locked
-
-    def __exit__(self, *args):
-        if self._locked:
-            self._lock.release()
-            self._locked = False
 
 class CameraDaemon:
     """Daemon interface for talon subystems"""
@@ -309,7 +268,8 @@ class CameraDaemon:
                         hdu.writeto(LATEST_FRAME_TEMP_PATH, clobber=True)
                         shutil.move(LATEST_FRAME_TEMP_PATH, LATEST_FRAME_PATH)
                         try:
-                            with Pyro4.Proxy(PIPELINE_URL) as pipeline:
+                            pipeline = observatory.daemons.onemetre_pipeline
+                            with pipeline.connect(PYRO_COMM_TIMEOUT) as pipeline:
                                 pipeline.notify_latest_frame(INSTRUMENT_ARM, LATEST_FRAME_PATH)
                         except Exception as e:
                             print('save thread: failed to notify latest frame with error ' + str(e))
@@ -323,7 +283,8 @@ class CameraDaemon:
                             self._output_frame_number += 1
 
                             try:
-                                with Pyro4.Proxy(PIPELINE_URL) as pipeline:
+                                pipeline = observatory.daemons.onemetre_pipeline
+                                with pipeline.connect(PYRO_COMM_TIMEOUT) as pipeline:
                                     pipeline.notify_saved_frame(INSTRUMENT_ARM, path)
                             except Exception as e:
                                 print('save thread: failed to notify frame with error ' + str(e))
@@ -374,7 +335,7 @@ class CameraDaemon:
         ]
 
         try:
-            with Pyro4.Proxy(TELD_URL) as teld:
+            with observatory.daemons.onemetre_telescope.connect(PYRO_COMM_TIMEOUT) as teld:
                 t = teld.report_status()
                 h.append(('TELSWVER', t['software_version'], 'TCS server software version'))
                 h.append(('TELSTATE', t['state_label'], 'telescope status'))
@@ -460,7 +421,7 @@ class CameraDaemon:
         ]
 
         try:
-            with Pyro4.Proxy(VAISALA_URL) as vaisala:
+            with observatory.daemons.onemetre_vaisala.connect(PYRO_COMM_TIMEOUT) as vaisala:
                 v = vaisala.last_measurement()
                 if v is not None:
                     h.append(('VSWVER', v['software_version'], 'vaisala server software version'))
@@ -477,7 +438,7 @@ class CameraDaemon:
         except Exception:
             pass
         try:
-            with Pyro4.Proxy(ROOMALERT_URL) as roomalert:
+            with observatory.daemons.onemetre_roomalert.connect(PYRO_COMM_TIMEOUT) as roomalert:
                 r = roomalert.last_measurement()
                 if r is not None:
                     h.append(('RASWVER', r['software_version'],
@@ -489,8 +450,8 @@ class CameraDaemon:
             pass
 
         try:
-            with Pyro4.Proxy(SUPERWASP_URL) as superwasp:
-                s = superwasp.last_measurement()
+            with observatory.daemons.superwasp_log.connect() as superwasp:
+                s = superwasp.last_measurement(PYRO_COMM_TIMEOUT)
                 if s is not None:
                     h.append(('SWSWVER', s['software_version'],
                               'superwasp monitor server software version'))
@@ -1200,33 +1161,6 @@ class CameraDaemon:
 
         return CommandStatus.Succeeded
 
-def sexagesimal(angle):
-    """Formats a decimal number in sexagesimal format"""
-    negative = angle < 0
-    angle = math.fabs(angle)
-
-    degrees = int(angle)
-    angle = (angle - degrees) * 60
-    minutes = int(angle)
-    seconds = (angle - minutes) * 60
-
-    if negative:
-        degrees *= -1
-
-    return '{:d}:{:02d}:{:05.2f}'.format(degrees, minutes, seconds)
-
-def spawn_daemon():
-    """Spawns the daemon and registers it with Pyro"""
-    Pyro4.config.COMMTIMEOUT = PYRO_COMM_TIMEOUT
-    Pyro4.config.REQUIRE_EXPOSE = True
-
-    pyro = Pyro4.Daemon(host=CAMD_HOST, port=CAMD_PORT)
-    camera = CameraDaemon()
-    uri = pyro.register(camera, objectId=CAMD_NAME)
-
-    print('Starting camera daemon with Pyro ID:', uri)
-    pyro.requestLoop()
-    print('Stopping camera daemon with Pyro ID:', uri)
-
 if __name__ == '__main__':
-    spawn_daemon()
+    CAMD_DAEMON.launch(CameraDaemon())
+

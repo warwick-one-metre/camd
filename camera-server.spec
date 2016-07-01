@@ -1,12 +1,12 @@
 Name:      onemetre-{CAMERA}-camera-server
-Version:   1.6
+Version:   1.7
 Release:   0
 Url:       https://github.com/warwick-one-metre/camd
 Summary:   Camera control server for the Warwick one-metre telescope.
 License:   GPL-3.0
 Group:     Unspecified
 BuildArch: noarch
-Requires:  python3, python3-Pyro4, python3-pyds9, python3-numpy, python3-astropy, %{?systemd_requires}
+Requires:  python3, python3-Pyro4, python3-pyds9, python3-numpy, python3-astropy, python3-warwickobservatory, onemetre-obslog-client, %{?systemd_requires}
 BuildRequires: systemd-rpm-macros
 
 %description
@@ -26,7 +26,6 @@ mkdir -p %{buildroot}%{_unitdir}
 
 %post
 %service_add_post {CAMERA}d.service
-%fillup_and_insserv -f -y {CAMERA}d.service
 
 %preun
 %stop_on_removal {CAMERA}d.service

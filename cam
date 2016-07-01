@@ -28,26 +28,17 @@ import sys
 import time
 import pyds9
 import Pyro4
-
-PYRO_COMM_TIMEOUT = 5
+import warwick.observatory as observatory
 
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = 'UNKNOWN'
 INSTRUMENT_ARM = 'BLUE'
 
 if INSTRUMENT_ARM == 'RED':
-    DEFAULT_TEMPERATURE = -60
-    CAMERA_SERIAL = 12723
-    CAM_PORT = 9010
-    CAM_NAME = 'red_camera_daemon'
+    CAMD_DAEMON = observatory.daemons.onemetre_red_camera
 else:
-    DEFAULT_TEMPERATURE = -30
-    CAMERA_SERIAL = 11575
-    CAM_PORT = 9011
-    CAM_NAME = 'blue_camera_daemon'
+    CAMD_DAEMON = observatory.daemons.onemetre_blue_camera
 
-CAM_HOST = '192.168.0.101'
-CAM_URI = 'PYRO:' + CAM_NAME + '@' + CAM_HOST + ':' + str(CAM_PORT)
 SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook
 
@@ -122,7 +113,7 @@ def run_command(command):
 
 def status():
     """Reports the current camera status"""
-    with Pyro4.Proxy(CAM_URI) as camd:
+    with CAMD_DAEMON.connect() as camd:
         data = camd.report_status()
 
     state_desc = '\033[1m\033[93mUNKNOWN\033[0m'
@@ -166,8 +157,9 @@ def status():
         FMT_BOLD + '{} e/ADU'.format(data['gain_factor']) + FMT_CLEAR + ')')
     print('   Readout speed is ' + FMT_BOLD + '{:.2f} MHz'.format(
         data['horizontal_shift_speed_mhz']) + FMT_CLEAR)
-    print('   Readout window is {4}({0}, {1}, {2}, {3}) px{5}'.format(data['geometry_x'],
-        data['geometry_y'], data['geometry_width'], data['geometry_height'], FMT_BOLD, FMT_CLEAR))
+    print('   Readout window is {4}({0}, {1}, {2}, {3}) px{5}'.format(
+        data['geometry_x'], data['geometry_y'], data['geometry_width'], data['geometry_height'],
+        FMT_BOLD, FMT_CLEAR))
     print('   Readout binning is {2}{0} x {1} px{3}'.format(
         data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
     print('   Exposure time is ' + FMT_BOLD + '{:.2f} s'.format(data['exposure_time']) + FMT_CLEAR)
@@ -182,21 +174,21 @@ def set_temperature(args):
     """Set the camera temperature"""
     if len(args) == 1:
         temp = int(args[0])
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_target_temperature(temp, True)
     print('usage: {} temperature <degrees>'.format(SCRIPT_NAME))
     return -1
 
 def stop_cooler():
     """Turns off active cooling"""
-    with Pyro4.Proxy(CAM_URI) as camd:
+    with CAMD_DAEMON.connect() as camd:
         return camd.enable_cooler(False)
 
 def set_exposure(args):
     """Set the camera exposure time"""
     if len(args) == 1:
         exposure = float(args[0])
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_exposure(exposure)
     print('usage: {} exposure <seconds>'.format(SCRIPT_NAME))
     return -1
@@ -209,7 +201,7 @@ def set_directory(args):
             path = str(Path(args[0]).resolve())
         except Exception:
             return 50
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_output_frame_directory(path)
     print('usage: {} dir <output frame directory>'.format(SCRIPT_NAME))
     return -1
@@ -217,7 +209,7 @@ def set_directory(args):
 def set_prefix(args):
     """Set the output frame filename prefix"""
     if len(args) == 1:
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_output_frame_prefix(args[0])
     print('usage: {} prefix <output frame prefix>'.format(SCRIPT_NAME))
     return -1
@@ -225,7 +217,7 @@ def set_prefix(args):
 def set_frame_number(args):
     """Set the output frame number"""
     if len(args) == 1:
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_output_frame_number(args[0])
     print('usage: {} frameno <output frame number>'.format(SCRIPT_NAME))
     return -1
@@ -234,7 +226,7 @@ def set_gain(args):
     """Set the camera gain"""
     if len(args) == 1 and (args[0] == 'high' or args[0] == 'medium' or args[0] == 'low'):
         index = 0 if args[0] == 'high' else 1 if args[0] == 'medium' else 2
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_gain(index)
     print('usage: {} gain [high|medium|low]'.format(SCRIPT_NAME))
     return -1
@@ -244,7 +236,7 @@ def set_horizontal_shift_speed(args):
     options = ['a', 'b', 'c', 'd']
     if len(args) == 1 and args[0] in options:
         index = options.index(args[0])
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_horizontal_shift(index)
     print('usage: {} readout [a|b|c|d]'.format(SCRIPT_NAME))
     return -1
@@ -253,7 +245,7 @@ def set_shutter(args):
     """Set the camera shutter mode"""
     if len(args) == 1 and (args[0] == 'auto' or args[0] == 'dark'):
         enabled = args[0] == 'auto'
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_shutter(enabled)
     print('usage: {} shutter [auto|dark]'.format(SCRIPT_NAME))
     return -1
@@ -263,7 +255,7 @@ def set_binning(args):
     if len(args) == 1:
         # Assume square pixels
         binning = int(args[0])
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_binning(binning, binning)
     print('usage: {} binning <pixel size>'.format(SCRIPT_NAME))
     return -1
@@ -275,7 +267,7 @@ def set_window(args):
         y = int(args[1])
         width = int(args[2])
         height = int(args[3])
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_window(x, y, width, height)
     print('usage: {} window <x> <y> <width> <height>'.format(SCRIPT_NAME))
     return -1
@@ -311,13 +303,13 @@ def register_preview():
     except Exception:
         print('error: failed to open DS9 preview window')
         return -1
-    with Pyro4.Proxy(CAM_URI) as camd:
+    with CAMD_DAEMON.connect() as camd:
         return camd.register_preview(address)
 
 def set_save(args):
     """Enable or disable saving acquired frames to disk"""
     if len(args) == 1 and (args[0] == 'enable' or args[0] == 'disable'):
-        with Pyro4.Proxy(CAM_URI) as camd:
+        with CAMD_DAEMON.connect() as camd:
             return camd.set_save(args[0] == 'enable')
 
     print('usage: {} save (enable|disable)'.format(SCRIPT_NAME))
@@ -329,7 +321,7 @@ def start(args):
         try:
             count = 0 if args[0] == 'continuous' else int(args[0])
             if args[0] == 'continuous' or count > 0:
-                with Pyro4.Proxy(CAM_URI) as camd:
+                with CAMD_DAEMON.connect() as camd:
                     return camd.start_sequence(count)
         except Exception:
             print('error: invalid exposure count:', args[0])
@@ -339,17 +331,17 @@ def start(args):
 
 def stop():
     """Stops any active camera exposures"""
-    with Pyro4.Proxy(CAM_URI) as camd:
+    with CAMD_DAEMON.connect() as camd:
         return camd.stop_sequence()
 
 def initialize():
     """Enables the camera driver"""
-    with Pyro4.Proxy(CAM_URI) as camd:
+    with CAMD_DAEMON.connect() as camd:
         return camd.initialize()
 
 def shutdown():
     """Disables the camera drivers"""
-    with Pyro4.Proxy(CAM_URI) as camd:
+    with CAMD_DAEMON.connect() as camd:
         return camd.shutdown()
 
 def reboot():
@@ -388,7 +380,6 @@ def print_usage():
     return 0
 
 if __name__ == '__main__':
-    Pyro4.config.COMMTIMEOUT = PYRO_COMM_TIMEOUT
     if len(sys.argv) == 1:
         sys.exit(print_usage())
 
