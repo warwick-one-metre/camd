@@ -53,6 +53,7 @@ if INSTRUMENT_ARM == 'RED':
     LOG_TABLE = 'redd'
     PRESCAN_COLUMNS = 20
     POSTSCAN_COLUMNS = 20
+    ARM_FILTER = 'Z'
 else:
     DEFAULT_TEMPERATURE = -30
     CAMERA_SERIAL = 11575
@@ -60,6 +61,7 @@ else:
     CAMD_DAEMON = observatory.daemons.onemetre_blue_camera
     PRESCAN_COLUMNS = 0
     POSTSCAN_COLUMNS = 0
+    ARM_FILTER = 'BG40'
 
 DEFAULT_OUTPUT_PATH = '/home/saft/OBS_DATA'
 DEFAULT_FRAME_PREFIX = 'junk'
@@ -406,6 +408,7 @@ class CameraDaemon:
             ('CAMERA', self._camera_model + ' ({})'.format(self._camera_serial),
              'camera model and serial number'),
             ('INSTRARM', INSTRUMENT_ARM, 'red or blue arm of the instrument'),
+            ('FILTER', ARM_FILTER, 'filter installed in instrument arm'),
             ('CCD-TEMP', round(self._temperature, 2), '[deg c] CCD temperature at end of exposure'),
             ('SET-TEMP', self._target_temperature, '[deg c] CCD temperature set point'),
             ('TEMP-LCK', self._temperature_locked, 'CCD temperature is locked to set point'),
