@@ -8,11 +8,8 @@ _cam()
     opts="red blue"
 
     case "${prev}" in
-        blue)
-            opts="status preview save exposure dir prefix frameno shutter gain readout bin window start init temperature cooleroff kill reboot"
-            ;;
-        red)
-            opts="status preview save exposure dir prefix frameno shutter gain readout bin window start init temperature cooleroff kill reboot"
+        blue|red)
+            opts="status exposure shutter gain readout bin window start init temperature cooleroff kill reboot"
             ;;
         gain)
             opts="high medium low"
@@ -28,12 +25,6 @@ _cam()
             ;;
         start)
             opts="continuous"
-            ;;
-        dir)
-            # Fall back to readline completion for dirs (from the -o default)
-            compopt -o default
-            COMPREPLY=()
-            return 0
             ;;
         *)
             ;;

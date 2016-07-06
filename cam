@@ -20,13 +20,9 @@
 # pylint: disable=invalid-name
 # pylint: disable=broad-except
 
-from pathlib import Path
 import os
-import random
-import subprocess
 import sys
 import time
-import pyds9
 import Pyro4
 import warwick.observatory as observatory
 
@@ -59,7 +55,7 @@ STATUS_CODES = {
     11: 'error: camera is not idle',
     14: 'error: camera has already been initialized',
     15: 'error: camera is not acquiring',
-    16: 'error: cannot change output path while an exposure sequence is saving',
+
     20: 'error: requested temperature is outside the supported limits',
 
     # Readout geometry
@@ -69,8 +65,6 @@ STATUS_CODES = {
 
     40: 'error: invalid gain',
     41: 'error: invalid shift speed',
-
-    50: 'error: directory doesn\'t exist or isn\'t writable',
 
     # cam specific codes
     -100: 'error: terminated by user',
@@ -165,11 +159,7 @@ def status(daemon, _):
     print('   Readout binning is {2}{0} x {1} px{3}'.format(
         data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
     print('   Exposure time is ' + FMT_BOLD + '{:.2f} s'.format(data['exposure_time']) + FMT_CLEAR)
-    print('   Frame directory is ' + FMT_BOLD + data['frame_directory'] + FMT_CLEAR)
-    print('   Next frame will be ' + FMT_BOLD + data['next_filename'] + FMT_CLEAR)
 
-    save_status = FMT_GREEN + 'ENABLED' if data['save_enabled'] else FMT_RED + 'DISABLED'
-    print('   Saving is ' + FMT_BOLD + save_status + FMT_CLEAR)
     return 0
 
 def set_temperature(daemon, args):
@@ -193,35 +183,6 @@ def set_exposure(daemon, args):
         with daemon.connect() as camd:
             return camd.set_exposure(exposure)
     print('usage: {} exposure <seconds>'.format(SCRIPT_NAME))
-    return -1
-
-def set_directory(daemon, args):
-    """Set the output frame directory"""
-    if len(args) == 1:
-        # Validate path and make it absolute
-        try:
-            path = str(Path(args[0]).resolve())
-        except Exception:
-            return 50
-        with daemon.connect() as camd:
-            return camd.set_output_frame_directory(path)
-    print('usage: {} dir <output frame directory>'.format(SCRIPT_NAME))
-    return -1
-
-def set_prefix(daemon, args):
-    """Set the output frame filename prefix"""
-    if len(args) == 1:
-        with daemon.connect() as camd:
-            return camd.set_output_frame_prefix(args[0])
-    print('usage: {} prefix <output frame prefix>'.format(SCRIPT_NAME))
-    return -1
-
-def set_frame_number(daemon, args):
-    """Set the output frame number"""
-    if len(args) == 1:
-        with daemon.connect() as camd:
-            return camd.set_output_frame_number(args[0])
-    print('usage: {} frameno <output frame number>'.format(SCRIPT_NAME))
     return -1
 
 def set_gain(daemon, args):
@@ -274,49 +235,6 @@ def set_window(daemon, args):
     print('usage: {} window <x> <y> <width> <height>'.format(SCRIPT_NAME))
     return -1
 
-def register_preview(daemon, _):
-    """Open a new ds9 preview window and register it with the server"""
-    try:
-        # Generate a random name to avoid collisions
-        names = pyds9.ds9_targets()
-        while True:
-            name = 'preview-{:06d}'.format(random.randint(0, 999999))
-            if names is None or not any(n.startswith('DS9:'+name) for n in names):
-                break
-
-        ds9 = pyds9.DS9(name, wait=10)
-        address = ds9.access().split(' ')[-1]
-
-        # Register access for camd to update the preview
-        command = ['xpaset', '-p', name, '-acl', daemon.host, '+']
-        subprocess.check_call(command, timeout=5)
-
-        ds9.set('view filename no')
-        ds9.set('view physical no')
-        ds9.set('view frame no')
-        ds9.set('view buttons no')
-        ds9.set('view colorbar no')
-        ds9.set('view layout vertical')
-        ds9.set('scale mode zscale')
-        ds9.set('width 512')
-        ds9.set('height 572')
-        ds9.set('background black')
-        ds9.set('zoom 0.5')
-    except Exception:
-        print('error: failed to open DS9 preview window')
-        return -1
-    with daemon.connect() as camd:
-        return camd.register_preview(address)
-
-def set_save(daemon, args):
-    """Enable or disable saving acquired frames to disk"""
-    if len(args) == 1 and (args[0] == 'enable' or args[0] == 'disable'):
-        with daemon.connect() as camd:
-            return camd.set_save(args[0] == 'enable')
-
-    print('usage: {} save (enable|disable)'.format(SCRIPT_NAME))
-    return -1
-
 def start(daemon, args):
     """Starts an exposure sequence"""
     if len(args) == 1:
@@ -359,12 +277,7 @@ def print_usage():
     print()
     print('general commands:')
     print('   status       print a human-readable summary of the camera status')
-    print('   preview      open a ds9 window to preview acquired frames')
-    print('   save         enable or disable frame saving')
     print('   exposure     set exposure time in seconds')
-    print('   dir          set output frame directory')
-    print('   prefix       set output frame prefix')
-    print('   frameno      set output frame number')
     print('   shutter      set shutter mode')
     print('   gain         set gain mode')
     print('   readout      set readout speed')
@@ -390,17 +303,12 @@ if __name__ == '__main__':
         'cooleroff': stop_cooler,
         'temperature': set_temperature,
         'exposure': set_exposure,
-        'dir': set_directory,
-        'prefix': set_prefix,
-        'frameno': set_frame_number,
         'shutter': set_shutter,
         'gain': set_gain,
         'readout': set_horizontal_shift_speed,
         'bin': set_binning,
         'window': set_window,
         'status': status,
-        'preview': register_preview,
-        'save': set_save,
         'start': start,
         'stop': stop,
         'init': initialize,
