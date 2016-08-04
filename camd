@@ -302,10 +302,11 @@ class CameraDaemon:
                 cdata = (c_uint16 * pixel_count).from_buffer(framedata)
                 status = self._driver.GetAcquiredData16(byref(cdata), c_long(pixel_count))
                 if status != AndorStatus.Success:
-                    print('exposure sequence: failed to get acquired data with status ' + \
-                          str(status))
-                    observatory.log.error(self._log_table, 'Failed to query frame data (' \
-                                  + str(status) + ')')
+                    if not self._stop_acquisition:
+                        print('exposure sequence: failed to get acquired data with status ' + \
+                            str(status))
+                        observatory.log.error(self._log_table, 'Failed to query frame data (' \
+                                    + str(status) + ')')
                     break
 
                 self._exposure_count += 1
