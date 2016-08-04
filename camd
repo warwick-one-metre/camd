@@ -730,7 +730,7 @@ class CameraDaemon:
                 self._shutter_enabled = enabled
 
             observatory.log.info(self._log_table, 'Shutter set to ' \
-                                 + 'auto' if enabled else 'closed')
+                                 + ('auto' if enabled else 'closed'))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
