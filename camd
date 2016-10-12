@@ -806,7 +806,7 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._exposure_time = seconds
 
-            observatory.log.info(self._log_table, 'Exposure time set to ' + str(seconds) + 's')
+            observatory.log.info(self._log_table, 'Exposure time set to {:.3f}s'.format(seconds))
             return CommandStatus.Succeeded
 
     def __set_ccd_geometry(self, bin_x, bin_y, x, y, width, height):
