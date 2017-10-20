@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.4
 #
 # This file is part of camd.
 #
@@ -24,7 +24,7 @@ import os
 import sys
 import time
 import Pyro4
-import warwick.observatory as observatory
+from warwick.observatory.common import daemons
 
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = 'UNKNOWN'
@@ -33,8 +33,8 @@ SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook
 
 DAEMONS = {
-    'blue': observatory.daemons.onemetre_blue_camera,
-    'red': observatory.daemons.onemetre_red_camera
+    'blue': daemons.onemetre_blue_camera,
+    'red': daemons.onemetre_red_camera
 }
 
 FMT_GREEN = '\033[92m'
@@ -320,4 +320,3 @@ if __name__ == '__main__':
         sys.exit(print_usage())
 
     sys.exit(run_command(DAEMONS[sys.argv[1]], commands[sys.argv[2]], sys.argv[3:]))
-

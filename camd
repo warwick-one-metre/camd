@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.4
 #
 # This file is part of camd.
 #
@@ -40,15 +40,17 @@ import time
 from astropy.io import fits
 import numpy
 import Pyro4
-import warwick.observatory as observatory
-from warwick.observatory import TryLock
+from warwick.observatory.common import (
+    daemons,
+    log,
+    TryLock)
 
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = "UNKNOWN"
 
 CONFIG = {
     'blue': {
-        'daemon': observatory.daemons.onemetre_blue_camera,
+        'daemon': daemons.onemetre_blue_camera,
         'serial': 11575,
         'temperature': -30,
         'gainindex': 0,
@@ -63,7 +65,7 @@ CONFIG = {
         'expcountlog': '/var/tmp/blue-counter.json'
     },
     'red': {
-        'daemon': observatory.daemons.onemetre_red_camera,
+        'daemon': daemons.onemetre_red_camera,
         'serial': 12723,
         'temperature': -60,
         'gainindex': 0,
@@ -284,8 +286,8 @@ class CameraDaemon:
                 if status != AndorStatus.Success:
                     print('exposure sequence: failed to start acquisition with status ' + \
                           str(status))
-                    observatory.log.error(self._log_table, 'Failed to start exposure sequence (' \
-                                  + str(status) + ')')
+                    log.error(self._log_table, 'Failed to start exposure sequence (' \
+                        + str(status) + ')')
                     break
 
                 self._sequence_exposure_start_time = start_time
@@ -294,8 +296,8 @@ class CameraDaemon:
                 status = self._driver.WaitForAcquisition()
                 if status != AndorStatus.Success:
                     print('exposure sequence: waiting failed with status ' + str(status))
-                    observatory.log.error(self._log_table, 'Failed to wait for acquisition (' \
-                                  + str(status) + ')')
+                    log.error(self._log_table, 'Failed to wait for acquisition (' \
+                        + str(status) + ')')
                     break
 
                 end_time = datetime.datetime.utcnow()
@@ -305,8 +307,8 @@ class CameraDaemon:
                     if not self._stop_acquisition:
                         print('exposure sequence: failed to get acquired data with status ' + \
                             str(status))
-                        observatory.log.error(self._log_table, 'Failed to query frame data (' \
-                                    + str(status) + ')')
+                        log.error(self._log_table, 'Failed to query frame data (' \
+                            + str(status) + ')')
                     break
 
                 self._exposure_count += 1
@@ -370,7 +372,9 @@ class CameraDaemon:
 
                 shape = (self._geometry_height // self._geometry_bin_y,
                          self._geometry_width // self._geometry_bin_x)
+                # pylint: disable=no-member
                 data = numpy.frombuffer(framedata, dtype=numpy.uint16).reshape(shape)
+                # pylint: enable=no-member
                 hdu = fits.PrimaryHDU(data)
 
                 # Using Card and append() to force comment cards to be placed inline
@@ -392,20 +396,18 @@ class CameraDaemon:
                 except Exception as e:
                     self._stop_acquisition = True
                     print('Failed to save temporary frame: ' + str(e))
-                    observatory.log.error(self._log_table, 'Failed to save temporary frame (' \
+                    log.error(self._log_table, 'Failed to save temporary frame (' \
                                           + str(e) + ')')
 
                 # Hand frame over to the pipeline
                 # This may block if the pipeline is busy
                 try:
-                    pipeline = observatory.daemons.onemetre_pipeline
-                    with pipeline.connect(PIPELINE_HANDOVER_TIMEOUT) as pipeline:
+                    with daemons.onemetre_pipeline.connect(PIPELINE_HANDOVER_TIMEOUT) as pipeline:
                         pipeline.notify_frame(self._arm_name, path)
                 except Exception as e:
                     self._stop_acquisition = True
                     print('Failed to hand frame to pipeline: ' + str(e))
-                    observatory.log.error(self._log_table, 'Failed to hand frame to pipeline (' \
-                                          + str(e) + ')')
+                    log.error(self._log_table, 'Failed to hand frame to pipeline (' + str(e) + ')')
 
                 # Continue exposure sequence?
                 self._sequence_frame_count += 1
@@ -414,7 +416,7 @@ class CameraDaemon:
                     self._stop_acquisition = True
         finally:
             print('exposure sequence: complete')
-            observatory.log.info(self._log_table, 'Exposure sequence complete')
+            log.info(self._log_table, 'Exposure sequence complete')
             self._status = CameraStatus.Idle
 
     @Pyro4.expose
@@ -436,7 +438,7 @@ class CameraDaemon:
             if not self.__set_target_temperature_and_cooler(temperature, enable_cooler):
                 return CommandStatus.Failed
 
-            observatory.log.info(self._log_table, 'Target temperature set to ' + str(temperature))
+            log.info(self._log_table, 'Target temperature set to ' + str(temperature))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -452,8 +454,7 @@ class CameraDaemon:
             if not self.__set_target_temperature_and_cooler(self._target_temperature, enabled):
                 return CommandStatus.Failed
 
-            observatory.log.info(self._log_table, 'Cooler ' \
-                                 + ('enabled' if enabled else 'disabled'))
+            log.info(self._log_table, 'Cooler ' + ('enabled' if enabled else 'disabled'))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -704,9 +705,9 @@ class CameraDaemon:
                     if driver is not None:
                         driver.ShutDown()
                     self._status = CameraStatus.Disabled
-                    observatory.log.error(self._log_table, 'Failed to initialize camera')
+                    log.error(self._log_table, 'Failed to initialize camera')
                 else:
-                    observatory.log.info(self._log_table, 'Initialized camera')
+                    log.info(self._log_table, 'Initialized camera')
 
     @Pyro4.expose
     def set_shutter(self, enabled):
@@ -730,7 +731,7 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._shutter_enabled = enabled
 
-            observatory.log.info(self._log_table, 'Shutter set to ' \
+            log.info(self._log_table, 'Shutter set to ' \
                                  + ('auto' if enabled else 'closed'))
             return CommandStatus.Succeeded
 
@@ -756,7 +757,7 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._gain_index = gain_index
 
-            observatory.log.info(self._log_table, 'Gain index set to ' + str(gain_index))
+            log.info(self._log_table, 'Gain index set to ' + str(gain_index))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -782,7 +783,7 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._horizontal_shift_speed_index = shift_speed_index
 
-            observatory.log.info(self._log_table, 'Readout speed index set to ' \
+            log.info(self._log_table, 'Readout speed index set to ' \
                                  + str(shift_speed_index))
             return CommandStatus.Succeeded
 
@@ -806,7 +807,7 @@ class CameraDaemon:
                     return CommandStatus.Failed
                 self._exposure_time = seconds
 
-            observatory.log.info(self._log_table, 'Exposure time set to {:.3f}s'.format(seconds))
+            log.info(self._log_table, 'Exposure time set to {:.3f}s'.format(seconds))
             return CommandStatus.Succeeded
 
     def __set_ccd_geometry(self, bin_x, bin_y, x, y, width, height):
@@ -863,7 +864,7 @@ class CameraDaemon:
                                            self._geometry_width, self._geometry_height):
                 return CommandStatus.BinningIncompatibleWithWindow
 
-            observatory.log.info(self._log_table, 'Binning set to ' + str(bin_x) + 'x' + str(bin_y))
+            log.info(self._log_table, 'Binning set to ' + str(bin_x) + 'x' + str(bin_y))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -889,7 +890,7 @@ class CameraDaemon:
 
             region = '[' + str(x) + ':' + str(x + width - 1) + ',' + str(y) + ':' \
                      + str(y + height - 1) + ']'
-            observatory.log.info(self._log_table, 'Window set to ' + region)
+            log.info(self._log_table, 'Window set to ' + region)
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -916,7 +917,7 @@ class CameraDaemon:
                 self._driver.ShutDown()
                 self._driver = None
 
-            observatory.log.info(self._log_table, 'Shutdown camera')
+            log.info(self._log_table, 'Shutdown camera')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -939,7 +940,7 @@ class CameraDaemon:
             elif count > 1:
                 count_msg = str(count) + ' frames'
 
-            observatory.log.info(self._log_table, 'Starting exposure sequence (' + count_msg + ')')
+            log.info(self._log_table, 'Starting exposure sequence (' + count_msg + ')')
             self._sequence_frame_limit = count
             self._sequence_frame_count = 0
             self._stop_acquisition = False
@@ -961,7 +962,7 @@ class CameraDaemon:
 
         self._status = CameraStatus.Aborting
         print('aborting exposure sequence')
-        observatory.log.info(self._log_table, 'Aborting exposure sequence')
+        log.info(self._log_table, 'Aborting exposure sequence')
         with self._driver_lock:
             self._driver.AbortAcquisition()
 
@@ -977,4 +978,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
     cam_config = CONFIG[args.camera]
     cam_config['daemon'].launch(CameraDaemon(cam_config))
-

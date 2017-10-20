@@ -11,8 +11,8 @@ all:
 	mkdir -p build
 	cp camd camd.bak
 	awk '{sub("SOFTWARE_VERSION = .*$$","SOFTWARE_VERSION = \"$(SERVER_VERSION) ($(GIT_VERSION))\""); print $0}' camd.bak > camd
-	${RPMBUILD} -ba camera-server.spec
-	${RPMBUILD} -ba camera-client.spec
+	${RPMBUILD} -ba onemetre-camera-server.spec
+	${RPMBUILD} -ba onemetre-camera-client.spec
 	mv build/noarch/*.rpm .
 	rm -rf build
 	mv camd.bak camd
