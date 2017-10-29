@@ -26,4 +26,9 @@ The service will automatically start on system boot, or you can start it immedia
 sudo systemctl start red_camd.service blue_camd.service
 ```
 
+Finally, open ports in the firewall so that other machines on the network can access the daemons:
+```
+sudo firewall-cmd --zone=public --add-port=9010-9011/tcp --permanent
+sudo firewall-cmd --reload
+```
 
