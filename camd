@@ -389,7 +389,7 @@ class CameraDaemon:
                     path = str(self._output_directory / filename)
 
                     # Simulate an atomic write by writing to a temporary file then renaming
-                    hdu.writeto(path + '.tmp', clobber=True)
+                    hdu.writeto(path + '.tmp', overwrite=True)
                     shutil.move(path + '.tmp', path)
                     print('Saving temporary frame: ' + filename)
 
