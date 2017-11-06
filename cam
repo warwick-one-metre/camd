@@ -47,7 +47,7 @@ STATUS_CODES = {
     # General error codes
     1: 'error: command failed',
     2: 'error: another command is already running',
-
+    3: 'error: command not accepted from this IP',
     5: 'error: camera hardware not found',
 
     # Command-specific codes

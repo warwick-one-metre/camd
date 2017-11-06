@@ -43,7 +43,9 @@ import Pyro4
 from warwick.observatory.common import (
     daemons,
     log,
+    IP,
     TryLock)
+from warwick.observatory.common.helpers import pyro_client_matches
 
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = "UNKNOWN"
@@ -62,7 +64,8 @@ CONFIG = {
         'filter': 'BG40',
         'outputpath': '/var/tmp/',
         'outputprefix': 'blue',
-        'expcountlog': '/var/tmp/blue-counter.json'
+        'expcountlog': '/var/tmp/blue-counter.json',
+        'controlips': [IP.OneMetreDome, IP.OneMetreTCS]
     },
     'red': {
         'daemon': daemons.onemetre_red_camera,
@@ -77,7 +80,8 @@ CONFIG = {
         'filter': 'Z',
         'outputpath': '/var/tmp/',
         'outputprefix': 'red',
-        'expcountlog': '/var/tmp/red-counter.json'
+        'expcountlog': '/var/tmp/red-counter.json',
+        'controlips': [IP.OneMetreDome, IP.OneMetreTCS]
     }
 }
 
@@ -96,6 +100,7 @@ class CommandStatus:
     Succeeded = 0
     Failed = 1
     Blocked = 2
+    InvalidControlIP = 3
 
     CameraNotFound = 5
 
@@ -142,6 +147,7 @@ class CameraDaemon:
         self._log_table = config['logtable']
         self._arm_name = config['arm']
         self._filter_name = config['filter']
+        self._control_ips = config['controlips']
 
         self._driver = None
         self._driver_lock = threading.Lock()
@@ -422,6 +428,9 @@ class CameraDaemon:
     @Pyro4.expose
     def set_target_temperature(self, temperature, enable_cooler=None):
         """Set the target camera temperature.  Optionally enable or disable cooling"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -444,6 +453,9 @@ class CameraDaemon:
     @Pyro4.expose
     def enable_cooler(self, enabled):
         """Enable or disable active cooling"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -500,6 +512,9 @@ class CameraDaemon:
     @Pyro4.expose
     def initialize(self):
         """Connects to the camera driver"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -712,6 +727,9 @@ class CameraDaemon:
     @Pyro4.expose
     def set_shutter(self, enabled):
         """Enable or disable the shutter"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -738,6 +756,9 @@ class CameraDaemon:
     @Pyro4.expose
     def set_gain(self, gain_index):
         """Set the preamplifier gain index"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -763,6 +784,9 @@ class CameraDaemon:
     @Pyro4.expose
     def set_horizontal_shift(self, shift_speed_index):
         """Set the horizontal shift speed index"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -790,6 +814,9 @@ class CameraDaemon:
     @Pyro4.expose
     def set_exposure(self, seconds):
         """Set the exposure time in seconds"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -850,6 +877,9 @@ class CameraDaemon:
     @Pyro4.expose
     def set_binning(self, bin_x, bin_y):
         """Sets the CCD readout binning (both x and y)"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -870,6 +900,9 @@ class CameraDaemon:
     @Pyro4.expose
     def set_window(self, x, y, width, height):
         """Sets the CCD readout window in unbinned (hardware) pixels"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -896,6 +929,9 @@ class CameraDaemon:
     @Pyro4.expose
     def shutdown(self):
         """Disconnects from the camera driver"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -923,6 +959,9 @@ class CameraDaemon:
     @Pyro4.expose
     def start_sequence(self, count):
         """Starts an exposure sequence with a set number of frames, or 0 to run until stopped"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -954,6 +993,9 @@ class CameraDaemon:
     @Pyro4.expose
     def stop_sequence(self):
         """Stops any active exposure sequence"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
         if self._status == CameraStatus.Disabled:
             return CommandStatus.CameraNotInitialized
 
