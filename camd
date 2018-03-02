@@ -114,6 +114,7 @@ class CommandStatus:
     BinningIncompatibleWithWindow = 30
     WindowIncompatibleWithBinning = 31
     WindowOutsideCCD = 32
+    InvalidWindow = 33
 
     InvalidGainIndex = 40
     InvalidShiftSpeedIndex = 41
@@ -143,6 +144,7 @@ class AndorStatus:
 class CameraDaemon:
     """Daemon interface for andor camera"""
     def __init__(self, config):
+        self._config = config
         self._status = CameraStatus.Disabled
         self._log_table = config['logtable']
         self._arm_name = config['arm']
@@ -259,22 +261,79 @@ class CameraDaemon:
             time.sleep(STATUS_QUERY_DELAY)
 
     def __set_target_temperature_and_cooler(self, target_temperature, cooler_enabled):
-        """Set the camera temperature and cooler configuration"""
-        self._target_temperature = target_temperature
+        """Set the camera temperature and cooler configuration
+           Returns an AndorStatus return code
+        """
+
         with self._driver_lock:
             if self._driver is None:
                 return False
 
             status = self._driver.SetTemperature(c_int(target_temperature))
             if status != AndorStatus.Success:
-                return False
+                print('failed to set temperature to {} with status {}'.format(target_temperature,
+                                                                              status))
+                return status
 
+            self._target_temperature = target_temperature
             if cooler_enabled:
                 status = self._driver.CoolerON()
             else:
                 status = self._driver.CoolerOFF()
 
-            return status == AndorStatus.Success
+            return status
+
+    def __set_shutter(self, enabled):
+        """Set the shutter to open automatically or stay closed
+           Returns an AndorStatus return code
+        """
+        with self._driver_lock:
+            value = c_int(0 if enabled else 2)
+            status = self._driver.SetShutter(c_int(1), value, c_int(50), c_int(50))
+            if status == AndorStatus.Success:
+                self._shutter_enabled = enabled
+            else:
+                mode = 'auto' if enabled else 'closed'
+                print('failed to set shutter {} with status {}'.format(mode, status))
+            return status
+
+    def __set_gain_index(self, gain_index):
+        """Sets the gain to the requested index
+           Returns an AndorStatus return code
+        """
+        with self._driver_lock:
+            status = self._driver.SetPreAmpGain(c_int(gain_index))
+            if status == AndorStatus.Success:
+                self._gain_index = gain_index
+            else:
+                print('failed to set gain {} with status {}'.format(gain_index, status))
+        return status
+
+    def __set_horizontal_shift_index(self, shift_speed_index):
+        """Sets the horizontal shift speed to the requested index
+           Returns an AndorStatus return code
+        """
+        with self._driver_lock:
+            status = self._driver.SetHSSpeed(c_int(0), c_int(shift_speed_index))
+            if status == AndorStatus.Success:
+                self._horizontal_shift_speed_index = shift_speed_index
+            else:
+                print('failed to set horizontal shift {} with status {}'.format(
+                    shift_speed_index, status))
+        return status
+
+    def __set_exposure_time(self, exposure_seconds):
+        """Sets the given exposure time in seconds
+           Returns an AndorStatus return code
+        """
+        with self._driver_lock:
+            status = self._driver.SetExposureTime(c_float(exposure_seconds))
+            if status == AndorStatus.Success:
+                self._exposure_time = exposure_seconds
+            else:
+                print('failed to set exposure ({}s) with status {}'.format(
+                    exposure_seconds, status))
+        return status
 
     def __run_exposure_sequence(self):
         """Worker thread that acquires frames and their times.
@@ -444,7 +503,8 @@ class CameraDaemon:
             if enable_cooler is None:
                 enable_cooler = self._cooler_enabled
 
-            if not self.__set_target_temperature_and_cooler(temperature, enable_cooler):
+            status = self.__set_target_temperature_and_cooler(temperature, enable_cooler)
+            if status != AndorStatus.Success:
                 return CommandStatus.Failed
 
             log.info(self._log_table, 'Target temperature set to ' + str(temperature))
@@ -463,7 +523,8 @@ class CameraDaemon:
             if self._status == CameraStatus.Disabled:
                 return CommandStatus.CameraNotInitialized
 
-            if not self.__set_target_temperature_and_cooler(self._target_temperature, enabled):
+            status = self.__set_target_temperature_and_cooler(self._target_temperature, enabled)
+            if status != AndorStatus.Success:
                 return CommandStatus.Failed
 
             log.info(self._log_table, 'Cooler ' + ('enabled' if enabled else 'disabled'))
@@ -725,6 +786,87 @@ class CameraDaemon:
                     log.info(self._log_table, 'Initialized camera')
 
     @Pyro4.expose
+    def configure(self, params):
+        """Set camera configuration to the requested state
+           params should be a dictionary with the following keys:
+              temperature: Temperature set point
+              cooler: Enable the cooler (True/False)
+              shutter: Enable the shutter (True/False)
+              gainindex: Gain index
+              readoutindex: Readout index
+              exposure: Rxposure time in seconds
+              window: Tuple of (binx, biny, x, y, width, height)
+           Any properties not specified in params will be reset to its default
+        """
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            if self._status == CameraStatus.Disabled:
+                return CommandStatus.CameraNotInitialized
+
+            if self._status != CameraStatus.Idle:
+                return CommandStatus.CameraNotIdle
+
+            # Reset cooling
+            temperature = params.get('temperature', self._config['temperature'])
+            cooler = params.get('cooler', True)
+            if self.__set_target_temperature_and_cooler(temperature, cooler) != AndorStatus.Success:
+                return CommandStatus.Failed
+
+            log.info(self._log_table, 'Target temperature set to ' + str(temperature))
+            log.info(self._log_table, 'Cooler ' + ('enabled' if cooler else 'disabled'))
+
+            # Reset shutter
+            shutter = params.get('shutter', False)
+            if self.__set_shutter(shutter) != AndorStatus.Success:
+                return CommandStatus.Failed
+
+            log.info(self._log_table, 'Shutter set to ' + ('auto' if shutter else 'closed'))
+
+            # Reset gain
+            gain_index = params.get('gainindex', self._config['gainindex'])
+            gain_status = self.__set_gain_index(gain_index)
+            if gain_status == AndorStatus.DrvP1Invalid:
+                return CommandStatus.InvalidGainIndex
+            if gain_status != AndorStatus.Success:
+                return CommandStatus.Failed
+
+            log.info(self._log_table, 'Gain index set to ' +  str(gain_index))
+
+            # Reset readout speed
+            shift_speed_index = params.get('readoutindex', self._config['horizontalshiftindex'])
+            readout_status = self.__set_horizontal_shift_index(shift_speed_index)
+            if readout_status == AndorStatus.DrvP2Invalid:
+                return CommandStatus.InvalidShiftSpeedIndex
+            if readout_status != AndorStatus.Success:
+                return CommandStatus.Failed
+
+            log.info(self._log_table, 'Readout speed index set to ' +  str(shift_speed_index))
+
+            # Reset exposure time
+            exposure = params.get('exposure', self._config['exposure'])
+            if self.__set_exposure_time(exposure) != AndorStatus.Success:
+                return CommandStatus.Failed
+
+            log.info(self._log_table, 'Exposure time set to {:.3f}s'.format(exposure))
+
+            # Reset readout geometry
+            w = params.get('window', (1, 1, 1, 1, self._ccd_width, self._ccd_height))
+            if len(w) != 6:
+                return CommandStatus.InvalidWindow
+
+            if not self.__set_ccd_geometry(w[0], w[1], w[2], w[3], w[4], w[5]):
+                return CommandStatus.InvalidWindow
+
+            log.info(self._log_table, 'Binning set to {}x{}'.format(w[0], w[1]))
+            log.info(self._log_table, 'Window set to [{}:{},{}:{}]'.format(w[2], w[4], w[3], w[5]))
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
     def set_shutter(self, enabled):
         """Enable or disable the shutter"""
         if not pyro_client_matches(self._control_ips):
@@ -740,17 +882,10 @@ class CameraDaemon:
             if self._status != CameraStatus.Idle:
                 return CommandStatus.CameraNotIdle
 
-            with self._driver_lock:
-                value = c_int(0 if enabled else 2)
-                status = self._driver.SetShutter(c_int(1), value, c_int(50), c_int(50))
-                if status != AndorStatus.Success:
-                    mode = 'auto' if enabled else 'closed'
-                    print('failed to set shutter {} with status {}'.format(mode, status))
-                    return CommandStatus.Failed
-                self._shutter_enabled = enabled
+            if self.__set_shutter(enabled) != AndorStatus.Success:
+                return CommandStatus.Failed
 
-            log.info(self._log_table, 'Shutter set to ' \
-                                 + ('auto' if enabled else 'closed'))
+            log.info(self._log_table, 'Shutter set to ' + ('auto' if enabled else 'closed'))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -769,14 +904,12 @@ class CameraDaemon:
             if self._status != CameraStatus.Idle:
                 return CommandStatus.CameraNotIdle
 
-            with self._driver_lock:
-                status = self._driver.SetPreAmpGain(c_int(gain_index))
-                if status == AndorStatus.DrvP1Invalid:
-                    return CommandStatus.InvalidGainIndex
-                if status != AndorStatus.Success:
-                    print('failed to set gain {} with status {}'.format(gain_index, status))
-                    return CommandStatus.Failed
-                self._gain_index = gain_index
+            status = self.__set_gain_index(gain_index)
+            if status == AndorStatus.DrvP1Invalid:
+                return CommandStatus.InvalidGainIndex
+
+            if status != AndorStatus.Success:
+                return CommandStatus.Failed
 
             log.info(self._log_table, 'Gain index set to ' + str(gain_index))
             return CommandStatus.Succeeded
@@ -797,15 +930,12 @@ class CameraDaemon:
             if self._status != CameraStatus.Idle:
                 return CommandStatus.CameraNotIdle
 
-            with self._driver_lock:
-                status = self._driver.SetHSSpeed(c_int(0), c_int(shift_speed_index))
-                if status == AndorStatus.DrvP2Invalid:
-                    return CommandStatus.InvalidShiftSpeedIndex
-                if status != AndorStatus.Success:
-                    print('failed to set horizontal shift {} with status {}'.format(
-                        shift_speed_index, status))
-                    return CommandStatus.Failed
-                self._horizontal_shift_speed_index = shift_speed_index
+
+            status = self.__set_horizontal_shift_index(shift_speed_index)
+            if status == AndorStatus.DrvP2Invalid:
+                return CommandStatus.InvalidShiftSpeedIndex
+            if status != AndorStatus.Success:
+                return CommandStatus.Failed
 
             log.info(self._log_table, 'Readout speed index set to ' \
                                  + str(shift_speed_index))
@@ -827,12 +957,8 @@ class CameraDaemon:
             if self._status != CameraStatus.Idle:
                 return CommandStatus.CameraNotIdle
 
-            with self._driver_lock:
-                status = self._driver.SetExposureTime(c_float(seconds))
-                if status != AndorStatus.Success:
-                    print('failed to set exposure ({}s) with status {}'.format(seconds, status))
-                    return CommandStatus.Failed
-                self._exposure_time = seconds
+            if self.__set_exposure_time(seconds) != AndorStatus.Success:
+                return CommandStatus.Failed
 
             log.info(self._log_table, 'Exposure time set to {:.3f}s'.format(seconds))
             return CommandStatus.Succeeded

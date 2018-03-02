@@ -62,6 +62,7 @@ STATUS_CODES = {
     30: 'error: binning does not evenly divide readout window',
     31: 'error: window size is not compatible with the current binning',
     32: 'error: window extends outside the bounds of the ccd',
+    33: 'error: invalid readout window',
 
     40: 'error: invalid gain',
     41: 'error: invalid shift speed',
