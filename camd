@@ -46,6 +46,7 @@ from warwick.observatory.common import (
     IP,
     TryLock)
 from warwick.observatory.common.helpers import pyro_client_matches
+from warwick.w1m.camera import CommandStatus, CameraStatus
 
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = "UNKNOWN"
@@ -92,38 +93,6 @@ PIPELINE_HANDOVER_TIMEOUT = 10
 
 # Delay between camera state queries (in seconds)
 STATUS_QUERY_DELAY = 1
-
-# This should be kept in sync with the dictionary in cam
-class CommandStatus:
-    """Numeric return codes"""
-    # General error codes
-    Succeeded = 0
-    Failed = 1
-    Blocked = 2
-    InvalidControlIP = 3
-
-    CameraNotFound = 5
-
-    # Command-specific codes
-    CameraNotInitialized = 10
-    CameraNotIdle = 11
-    CameraNotUninitialized = 14
-    CameraNotAcquiring = 15
-
-    TemperatureOutsideLimits = 20
-    BinningIncompatibleWithWindow = 30
-    WindowIncompatibleWithBinning = 31
-    WindowOutsideCCD = 32
-    InvalidWindow = 33
-
-    InvalidGainIndex = 40
-    InvalidShiftSpeedIndex = 41
-
-class CameraStatus:
-    """Status of the camera hardware"""
-    # Note that the Reading status is assumed at status-query time
-    # and is never assigned to CameraDaemon._status
-    Disabled, Initializing, Idle, Acquiring, Reading, Aborting = range(6)
 
 class AndorStatus:
     """Status codes returned by libandor"""
