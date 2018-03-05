@@ -59,6 +59,7 @@ CONFIG = {
         'gainindex': 0,
         'exposure': 1,
         'horizontalshiftindex': 2,
+        'delay': 0,
         'overscan': (0, 0),
         'logtable': 'blue_camd',
         'arm': 'BLUE',
@@ -74,6 +75,7 @@ CONFIG = {
         'temperature': -60,
         'gainindex': 0,
         'exposure': 1,
+        'delay': 0,
         'horizontalshiftindex': 2,
         'overscan': (20, 20),
         'logtable': 'red_camd',
@@ -164,6 +166,7 @@ class CameraDaemon:
         self._gains = []
         self._gain_index = config['gainindex']
         self._exposure_time = config['exposure']
+        self._exposure_delay = config['delay']
 
         # Horizontal shift speeds in MHz: loaded during init
         self._horizontal_shift_speeds = []
@@ -175,6 +178,9 @@ class CameraDaemon:
 
         # Number of frames acquired this sequence
         self._sequence_frame_count = 0
+
+        # If non-None, time that the last pre-exposure delay was started
+        self._sequence_exposure_delay_start_time = None
 
         # Time that the latest frame in the exposure was started
         self._sequence_exposure_start_time = datetime.datetime.utcnow()
@@ -206,6 +212,9 @@ class CameraDaemon:
         # Signal that the exposure sequence should be terminated
         # at end of the current frame
         self._stop_acquisition = False
+
+        # Condition to support cancellation of the pre-exposure delay
+        self._exposure_delay_condition = threading.Condition()
 
         # Thread for polling camera status
         status_thread = threading.Thread(target=self.__poll_camera_status)
@@ -313,6 +322,16 @@ class CameraDaemon:
                           (self._geometry_height // self._geometry_bin_y)
             while not self._stop_acquisition:
                 framedata = bytearray(pixel_count * 2)
+
+                # Delay before starting exposures
+                if self._exposure_delay > 0:
+                    self._sequence_exposure_delay_start_time = datetime.datetime.utcnow()
+                    with self._exposure_delay_condition:
+                        self._exposure_delay_condition.wait(self._exposure_delay)
+
+                    self._sequence_exposure_delay_start_time = None
+                    if self._stop_acquisition:
+                        break
 
                 with self._driver_lock:
                     start_time = datetime.datetime.utcnow()
@@ -508,13 +527,19 @@ class CameraDaemon:
             gain_factor = self._gains[self._gain_index]
 
             # Estimate the current frame progress based on the time delta
-            progress = 0
+            exposure_progress = 0
+            delay_progress = 0
             if self._status == CameraStatus.Acquiring:
-                delta = datetime.datetime.utcnow() - self._sequence_exposure_start_time
-                progress = delta.total_seconds()
-                if progress > self._exposure_time:
-                    data['state'] = CameraStatus.Reading
-                    progress = 0
+                if self._sequence_exposure_delay_start_time:
+                    data['state'] = CameraStatus.Waiting
+                    delta = datetime.datetime.utcnow() - self._sequence_exposure_delay_start_time
+                    delay_progress = delta.total_seconds()
+                else:
+                    delta = datetime.datetime.utcnow() - self._sequence_exposure_start_time
+                    exposure_progress = delta.total_seconds()
+                    if exposure_progress > self._exposure_time:
+                        data['state'] = CameraStatus.Reading
+                        exposure_progress = 0
 
             data.update({
                 'temperature': self._temperature,
@@ -763,6 +788,7 @@ class CameraDaemon:
               shutter: Enable the shutter (True/False)
               gainindex: Gain index
               readoutindex: Readout index
+              delay: Pre-exposure delay in seconds
               exposure: Exposure time in seconds
               window: Tuple of (binx, biny, x, y, width, height)
            Any properties not specified in params will be reset to its default
@@ -818,6 +844,11 @@ class CameraDaemon:
                 return CommandStatus.Failed
 
             log.info(self._log_table, 'Readout speed index set to ' +  str(shift_speed_index))
+
+            # Reset exposure delay
+            self._exposure_delay = params.get('delay', self._config['delay'])
+
+            log.info(self._log_table, 'Exposure delay set to {:.3f}s'.format(self._exposure_delay))
 
             # Reset exposure time
             exposure = params.get('exposure', self._config['exposure'])
@@ -933,6 +964,27 @@ class CameraDaemon:
                 return CommandStatus.Failed
 
             log.info(self._log_table, 'Exposure time set to {:.3f}s'.format(seconds))
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def set_exposure_delay(self, seconds):
+        """Set the pre-exposure delay in seconds"""
+        if not pyro_client_matches(self._control_ips):
+            return CommandStatus.InvalidControlIP
+
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            if self._status == CameraStatus.Disabled:
+                return CommandStatus.CameraNotInitialized
+
+            if self._status != CameraStatus.Idle:
+                return CommandStatus.CameraNotIdle
+
+            self._exposure_delay = seconds
+
+            log.info(self._log_table, 'Exposure delay set to {:.3f}s'.format(seconds))
             return CommandStatus.Succeeded
 
     def __set_ccd_geometry(self, bin_x, bin_y, x, y, width, height):
@@ -1097,6 +1149,8 @@ class CameraDaemon:
         if self._status == CameraStatus.Disabled:
             return CommandStatus.CameraNotInitialized
 
+        # Note that the Waiting and Reading statuses are artificial
+        # self._status stays as CameraStatus.Acquiring during both of these
         if self._status != CameraStatus.Acquiring:
             return CommandStatus.CameraNotAcquiring
 
@@ -1108,6 +1162,9 @@ class CameraDaemon:
 
         self._sequence_frame_count = 0
         self._stop_acquisition = True
+
+        with self._exposure_delay_condition:
+            self._exposure_delay_condition.notify_all()
 
         return CommandStatus.Succeeded
 

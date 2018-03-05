@@ -91,15 +91,16 @@ class CameraStatus:
     """Status of the camera hardware"""
     # Note that the Reading status is assumed at status-query time
     # and is never assigned to CameraDaemon._status
-    Disabled, Initializing, Idle, Acquiring, Reading, Aborting = range(6)
+    Disabled, Initializing, Idle, Waiting, Acquiring, Reading, Aborting = range(7)
 
     _labels = {
         0: FMT_BOLD + FMT_RED + 'OFFLINE' + FMT_CLEAR,
         1: FMT_BOLD + FMT_RED + 'INITIALIZING' + FMT_CLEAR,
         2: FMT_BOLD + 'IDLE' + FMT_CLEAR,
-        3: FMT_BOLD + FMT_GREEN + 'EXPOSING' + FMT_CLEAR,
-        4: FMT_BOLD + FMT_YELLOW + 'READING' + FMT_CLEAR,
-        5: FMT_BOLD + FMT_RED + 'ABORTING' + FMT_CLEAR
+        3: FMT_BOLD + FMT_YELLOW + 'WAITING' + FMT_CLEAR,
+        4: FMT_BOLD + FMT_GREEN + 'EXPOSING' + FMT_CLEAR,
+        5: FMT_BOLD + FMT_YELLOW + 'READING' + FMT_CLEAR,
+        6: FMT_BOLD + FMT_RED + 'ABORTING' + FMT_CLEAR
     }
 
     @classmethod
