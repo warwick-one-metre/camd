@@ -59,6 +59,10 @@ def configure_validation_schema(camera):
                 'type': 'number',
                 'minimum': 0
             },
+            'delay': {
+                'type': 'number',
+                'minimum': 0
+            },
             'window': {
                 'type': 'array',
                 'minItems': 6,

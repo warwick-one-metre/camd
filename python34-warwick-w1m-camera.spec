@@ -13,7 +13,7 @@
 # published by the Open Source Initiative.
 
 Name:           python34-warwick-w1m-camera
-Version:        1.0.1
+Version:        1.0.2
 Release:        0
 License:        GPL3
 Summary:        Common backend code for the Warwick one-metre telescope camera daemon

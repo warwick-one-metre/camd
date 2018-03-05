@@ -75,6 +75,9 @@ def status(daemon, _):
     if data['state'] == CameraStatus.Acquiring:
         progress = '{:.1f} / {:.1f}s'.format(data['exposure_progress'], data['exposure_time'])
         state_desc += ' (' + FMT_BOLD + progress + FMT_CLEAR + ')'
+    elif data['state'] == CameraStatus.Waiting:
+        progress = '{:.1f} / {:.1f}s'.format(data['delay_progress'], data['delay_time'])
+        state_desc += ' (' + FMT_BOLD + progress + FMT_CLEAR + ')'
 
     # Camera is disabled
     print('   Camera is {}'.format(state_desc))
@@ -114,8 +117,13 @@ def status(daemon, _):
         FMT_BOLD, FMT_CLEAR))
     print('   Readout binning is {2}{0} x {1} px{3}'.format(
         data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
-    print('   Exposure time is ' + FMT_BOLD + '{:.2f} s'.format(data['exposure_time']) + FMT_CLEAR)
 
+    exposure_label = FMT_BOLD + '{:.2f} s'.format(data['exposure_time']) + FMT_CLEAR
+    if data['state'] == CameraStatus.Waiting:
+        exposure_label += ' (with ' + FMT_BOLD + '{:.2f} s'.format(data['delay_time']) + FMT_CLEAR
+        exposure_label += ' delay)'
+
+    print('   Exposure time is ' + exposure_label)
     return 0
 
 def set_temperature(daemon, args):
@@ -139,6 +147,15 @@ def set_exposure(daemon, args):
         with daemon.connect() as camd:
             return camd.set_exposure(exposure)
     print('usage: {} [blue|red] exposure <seconds>'.format(SCRIPT_NAME))
+    return -1
+
+def set_exposure_delay(daemon, args):
+    """Set the camera pre-exposure delay"""
+    if len(args) == 1:
+        delay = float(args[0])
+        with daemon.connect() as camd:
+            return camd.set_exposure_delay(delay)
+    print('usage: {} [blue|red] delay <seconds>'.format(SCRIPT_NAME))
     return -1
 
 def set_gain(daemon, args):
@@ -234,6 +251,7 @@ def print_usage():
     print('general commands:')
     print('   status       print a human-readable summary of the camera status')
     print('   exposure     set exposure time in seconds')
+    print('   delay        set pre-exposure delay in seconds')
     print('   shutter      set shutter mode')
     print('   gain         set gain mode')
     print('   readout      set readout speed')
@@ -259,6 +277,7 @@ if __name__ == '__main__':
         'cooleroff': stop_cooler,
         'temperature': set_temperature,
         'exposure': set_exposure,
+        'delay': set_exposure_delay,
         'shutter': set_shutter,
         'gain': set_gain,
         'readout': set_horizontal_shift_speed,
