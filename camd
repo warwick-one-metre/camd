@@ -763,9 +763,12 @@ class CameraDaemon:
               shutter: Enable the shutter (True/False)
               gainindex: Gain index
               readoutindex: Readout index
-              exposure: Rxposure time in seconds
+              exposure: Exposure time in seconds
               window: Tuple of (binx, biny, x, y, width, height)
            Any properties not specified in params will be reset to its default
+
+           The params dictionary should be validated using the
+           schema returned by the configure_validation_schema helper
         """
         if not pyro_client_matches(self._control_ips):
             return CommandStatus.InvalidControlIP
