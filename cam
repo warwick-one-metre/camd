@@ -27,6 +27,8 @@ import Pyro4
 from warwick.observatory.common import daemons
 from warwick.w1m.camera import CommandStatus, CameraStatus, CameraGain
 
+daemons.onemetre_blue_camera.host = '127.0.0.1'
+
 # Set automatically when generating RPM package
 SOFTWARE_VERSION = 'UNKNOWN'
 
@@ -105,10 +107,6 @@ def status(daemon, _):
 
     shutter_mode = FMT_GREEN + 'AUTO' if data['shutter_enabled'] else FMT_RED + 'DARK'
     print('   Shutter mode is ' + FMT_BOLD + shutter_mode + FMT_CLEAR)
-    print('   Pre-amp gain is ' + CameraGain.label(data['gain_index']) + ' (' + \
-        FMT_BOLD + '{} e/ADU'.format(data['gain_factor']) + FMT_CLEAR + ')')
-    print('   Readout speed is ' + FMT_BOLD + '{:.2f} MHz'.format(
-        data['horizontal_shift_speed_mhz']) + FMT_CLEAR)
     print('   Readout window is {4}({0}, {1}, {2}, {3}) px{5}'.format(
         data['geometry_x'], data['geometry_y'], data['geometry_width'], data['geometry_height'],
         FMT_BOLD, FMT_CLEAR))
@@ -128,7 +126,7 @@ def set_temperature(daemon, args):
     if len(args) == 1:
         temp = int(args[0])
         with daemon.connect() as camd:
-            return camd.set_target_temperature(temp, True)
+            return camd.set_target_temperature(temp)
     print('usage: {} [blue|red] temperature <degrees>'.format(SCRIPT_NAME))
     return -1
 
@@ -148,25 +146,6 @@ def set_exposure_delay(daemon, args):
         with daemon.connect() as camd:
             return camd.set_exposure_delay(delay)
     print('usage: {} [blue|red] delay <seconds>'.format(SCRIPT_NAME))
-    return -1
-
-def set_gain(daemon, args):
-    """Set the camera gain"""
-    if len(args) == 1 and (args[0] == 'high' or args[0] == 'medium' or args[0] == 'low'):
-        index = 0 if args[0] == 'high' else 1 if args[0] == 'medium' else 2
-        with daemon.connect() as camd:
-            return camd.set_gain(index)
-    print('usage: {} [blue|red] gain [high|medium|low]'.format(SCRIPT_NAME))
-    return -1
-
-def set_horizontal_shift_speed(daemon, args):
-    """Set the readout / horizontal shift speed"""
-    options = ['a', 'b', 'c', 'd']
-    if len(args) == 1 and args[0] in options:
-        index = options.index(args[0])
-        with daemon.connect() as camd:
-            return camd.set_horizontal_shift(index)
-    print('usage: {} [blue|red] readout [a|b|c|d]'.format(SCRIPT_NAME))
     return -1
 
 def set_shutter(daemon, args):
@@ -245,8 +224,6 @@ def print_usage():
     print('   exposure     set exposure time in seconds')
     print('   delay        set pre-exposure delay in seconds')
     print('   shutter      set shutter mode')
-    print('   gain         set gain mode')
-    print('   readout      set readout speed')
     print('   bin          set readout binning')
     print('   window       set readout window')
     print('   start        start an exposure sequence')
@@ -269,8 +246,6 @@ if __name__ == '__main__':
         'exposure': set_exposure,
         'delay': set_exposure_delay,
         'shutter': set_shutter,
-        'gain': set_gain,
-        'readout': set_horizontal_shift_speed,
         'bin': set_binning,
         'window': set_window,
         'status': status,
