@@ -96,9 +96,6 @@ def status(daemon, _):
     if data['temperature_locked']:
         temperature_status = FMT_BOLD + FMT_GREEN + 'LOCKED' + FMT_CLEAR
         temperature_fmt = FMT_BOLD + FMT_GREEN
-    elif not data['cooler_enabled']:
-        temperature_status = FMT_BOLD + FMT_RED + 'COOLING DISABLED' + FMT_CLEAR
-        temperature_fmt = FMT_BOLD
     else:
         temperature_status = FMT_BOLD + 'LOCKING ON {:.0f}\u00B0C'.format(
             data['target_temperature']) + FMT_CLEAR
@@ -134,11 +131,6 @@ def set_temperature(daemon, args):
             return camd.set_target_temperature(temp, True)
     print('usage: {} [blue|red] temperature <degrees>'.format(SCRIPT_NAME))
     return -1
-
-def stop_cooler(daemon, _):
-    """Turns off active cooling"""
-    with daemon.connect() as camd:
-        return camd.enable_cooler(False)
 
 def set_exposure(daemon, args):
     """Set the camera exposure time"""
@@ -262,7 +254,6 @@ def print_usage():
     print('engineering commands:')
     print('   init         initialize the camera driver')
     print('   temperature  set target temperature and enable cooling')
-    print('   cooleroff    disable cooling')
     print('   kill         disconnect from camera driver')
     print('   reboot       kill and reinitialize the camera driver')
     print()
@@ -274,7 +265,6 @@ if __name__ == '__main__':
         sys.exit(print_usage())
 
     commands = {
-        'cooleroff': stop_cooler,
         'temperature': set_temperature,
         'exposure': set_exposure,
         'delay': set_exposure_delay,

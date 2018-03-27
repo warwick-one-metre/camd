@@ -133,7 +133,6 @@ class CameraDaemon:
 
         self._temperature = 0
         self._temperature_locked = False
-        self._cooler_enabled = False
         self._target_temperature = config['temperature']
 
         # Temperature limits: loaded during init
@@ -232,14 +231,13 @@ class CameraDaemon:
                     status = self._driver.GetTemperatureF(byref(temp))
                     self._temperature = temp.value
                     self._temperature_locked = status == AndorStatus.TemperatureStabilized
-                    self._cooler_enabled = status != AndorStatus.TemperatureOff
                 else:
                     self._status = CameraStatus.Disabled
 
             time.sleep(STATUS_QUERY_DELAY)
 
-    def __set_target_temperature_and_cooler(self, target_temperature, cooler_enabled):
-        """Set the camera temperature and cooler configuration
+    def __set_target_temperature(self, target_temperature):
+        """Set the camera temperature
            Returns an AndorStatus return code
         """
 
@@ -254,10 +252,6 @@ class CameraDaemon:
                 return status
 
             self._target_temperature = target_temperature
-            if cooler_enabled:
-                status = self._driver.CoolerON()
-            else:
-                status = self._driver.CoolerOFF()
 
             return status
 
@@ -473,8 +467,8 @@ class CameraDaemon:
             self._status = CameraStatus.Idle
 
     @Pyro4.expose
-    def set_target_temperature(self, temperature, enable_cooler=None):
-        """Set the target camera temperature.  Optionally enable or disable cooling"""
+    def set_target_temperature(self, temperature):
+        """Set the target camera temperature"""
         if not pyro_client_matches(self._control_ips):
             return CommandStatus.InvalidControlIP
 
@@ -488,34 +482,11 @@ class CameraDaemon:
             if temperature < self._min_temperature or temperature > self._max_temperature:
                 return CommandStatus.TemperatureOutsideLimits
 
-            if enable_cooler is None:
-                enable_cooler = self._cooler_enabled
-
-            status = self.__set_target_temperature_and_cooler(temperature, enable_cooler)
+            status = self.__set_target_temperature(temperature)
             if status != AndorStatus.Success:
                 return CommandStatus.Failed
 
             log.info(self._log_table, 'Target temperature set to ' + str(temperature))
-            return CommandStatus.Succeeded
-
-    @Pyro4.expose
-    def enable_cooler(self, enabled):
-        """Enable or disable active cooling"""
-        if not pyro_client_matches(self._control_ips):
-            return CommandStatus.InvalidControlIP
-
-        with TryLock(self._command_lock) as success:
-            if not success:
-                return CommandStatus.Blocked
-
-            if self._status == CameraStatus.Disabled:
-                return CommandStatus.CameraNotInitialized
-
-            status = self.__set_target_temperature_and_cooler(self._target_temperature, enabled)
-            if status != AndorStatus.Success:
-                return CommandStatus.Failed
-
-            log.info(self._log_table, 'Cooler ' + ('enabled' if enabled else 'disabled'))
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -545,7 +516,6 @@ class CameraDaemon:
                 'temperature': self._temperature,
                 'temperature_locked': self._temperature_locked,
                 'target_temperature': self._target_temperature,
-                'cooler_enabled': self._cooler_enabled,
                 'shutter_enabled': self._shutter_enabled,
                 'exposure_time': self._exposure_time,
                 'exposure_progress': exposure_progress,
@@ -786,7 +756,6 @@ class CameraDaemon:
         """Set camera configuration to the requested state
            params should be a dictionary with the following keys:
               temperature: Temperature set point
-              cooler: Enable the cooler (True/False)
               shutter: Enable the shutter (True/False)
               gainindex: Gain index
               readoutindex: Readout index
@@ -813,12 +782,10 @@ class CameraDaemon:
 
             # Reset cooling
             temperature = params.get('temperature', self._config['temperature'])
-            cooler = params.get('cooler', True)
-            if self.__set_target_temperature_and_cooler(temperature, cooler) != AndorStatus.Success:
+            if self.__set_target_temperature(temperature) != AndorStatus.Success:
                 return CommandStatus.Failed
 
             log.info(self._log_table, 'Target temperature set to ' + str(temperature))
-            log.info(self._log_table, 'Cooler ' + ('enabled' if cooler else 'disabled'))
 
             # Reset shutter
             shutter = params.get('shutter', False)
