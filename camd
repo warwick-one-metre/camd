@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.4
+#!/usr/bin/env python3.6
 #
 # This file is part of camd.
 #
@@ -35,8 +35,10 @@ import datetime
 import json
 import pathlib
 import shutil
+import sys
 import threading
 import time
+import traceback
 from astropy.io import fits
 import numpy
 import Pyro4
@@ -54,11 +56,11 @@ SOFTWARE_VERSION = "UNKNOWN"
 CONFIG = {
     'blue': {
         'daemon': daemons.onemetre_blue_camera,
-        'serial': 11575,
+        'serial': 9587,
         'temperature': -30,
         'gainindex': 0,
         'exposure': 1,
-        'horizontalshiftindex': 2,
+        'horizontalshiftindex': 0,
         'delay': 0,
         'overscan': (0, 0),
         'logtable': 'blue_camd',
@@ -334,14 +336,22 @@ class CameraDaemon:
                         break
 
                 with self._driver_lock:
+                    status = self._driver.SetTriggerMode(6)
+                    if status != AndorStatus.Success:
+                        print('exposure sequence: failed to set trigger mode with status ' + \
+                              str(status))
+                        log.error(self._log_table, 'Failed to set trigger mode (' \
+                                  + str(status) + ')')
+                        break
+
                     start_time = datetime.datetime.utcnow()
                     status = self._driver.StartAcquisition()
-                if status != AndorStatus.Success:
-                    print('exposure sequence: failed to start acquisition with status ' + \
-                          str(status))
-                    log.error(self._log_table, 'Failed to start exposure sequence (' \
-                        + str(status) + ')')
-                    break
+                    if status != AndorStatus.Success:
+                        print('exposure sequence: failed to start acquisition with status ' + \
+                              str(status))
+                        log.error(self._log_table, 'Failed to start exposure sequence (' \
+                            + str(status) + ')')
+                        break
 
                 self._sequence_exposure_start_time = start_time
 
@@ -585,6 +595,8 @@ class CameraDaemon:
             try:
                 num_cameras = c_int32()
                 status = driver.GetAvailableCameras(byref(num_cameras))
+
+                print('cameras: {0}'.format(num_cameras.value))
                 if status != AndorStatus.Success or num_cameras.value == 0:
                     return CommandStatus.CameraNotFound
 
@@ -771,6 +783,8 @@ class CameraDaemon:
                                                              self._camera_serial))
 
                 return CommandStatus.Succeeded
+            except:
+                traceback.print_exc(file=sys.stdout)
             finally:
                 # Clean up on failure
                 if self._status != CameraStatus.Idle:
