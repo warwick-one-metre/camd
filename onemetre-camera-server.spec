@@ -1,5 +1,5 @@
 Name:      onemetre-camera-server
-Version:   2.2.0
+Version:   2.2.1
 Release:   0
 Url:       https://github.com/warwick-one-metre/camd
 Summary:   Camera control server for the Warwick one-metre telescope.
