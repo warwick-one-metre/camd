@@ -34,8 +34,7 @@ SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook
 
 DAEMONS = {
-    'blue': daemons.onemetre_blue_camera,
-    'red': daemons.onemetre_red_camera
+    'cmos': daemons.PyroDaemon('cmos_daemon', '127.0.0.1', 9011, 5)
 }
 
 FMT_GREEN = u'\033[92m'
@@ -91,32 +90,11 @@ def status(daemon, _):
         else:
             print('   Acquiring ' + FMT_BOLD + 'UNTIL STOPPED' + FMT_CLEAR)
 
-    temperature_status = ''
-    temperature_fmt = FMT_BOLD + FMT_RED
-    if data['temperature_locked']:
-        temperature_status = FMT_BOLD + FMT_GREEN + 'LOCKED' + FMT_CLEAR
-        temperature_fmt = FMT_BOLD + FMT_GREEN
-    elif not data['cooler_enabled']:
-        temperature_status = FMT_BOLD + FMT_RED + 'COOLING DISABLED' + FMT_CLEAR
-        temperature_fmt = FMT_BOLD
-    else:
-        temperature_status = FMT_BOLD + 'LOCKING ON {:.0f}\u00B0C'.format(
-            data['target_temperature']) + FMT_CLEAR
+    temperature_status = data['temperature_status']
+    temperature_fmt = FMT_BOLD
 
     print('   Temperature is ' + temperature_fmt + '{:.0f}'.format(data['temperature']) + \
           '\u00B0C' + FMT_CLEAR + ' (' + temperature_status + ')')
-
-    shutter_mode = FMT_GREEN + 'AUTO' if data['shutter_enabled'] else FMT_RED + 'DARK'
-    print('   Shutter mode is ' + FMT_BOLD + shutter_mode + FMT_CLEAR)
-    print('   Pre-amp gain is ' + CameraGain.label(data['gain_index']) + ' (' + \
-        FMT_BOLD + '{} e/ADU'.format(data['gain_factor']) + FMT_CLEAR + ')')
-    print('   Readout speed is ' + FMT_BOLD + '{:.2f} MHz'.format(
-        data['horizontal_shift_speed_mhz']) + FMT_CLEAR)
-    print('   Readout window is {4}({0}, {1}, {2}, {3}) px{5}'.format(
-        data['geometry_x'], data['geometry_y'], data['geometry_width'], data['geometry_height'],
-        FMT_BOLD, FMT_CLEAR))
-    print('   Readout binning is {2}{0} x {1} px{3}'.format(
-        data['geometry_bin_x'], data['geometry_bin_y'], FMT_BOLD, FMT_CLEAR))
 
     exposure_label = FMT_BOLD + '{:.2f} s'.format(data['exposure_time']) + FMT_CLEAR
     if data['state'] == CameraStatus.Waiting:
