@@ -34,7 +34,7 @@ SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook
 
 DAEMONS = {
-    'cmos': daemons.PyroDaemon('cmos_daemon', '127.0.0.1', 9011, 5)
+    'rasa': daemons.rasa_camera
 }
 
 FMT_GREEN = u'\033[92m'
