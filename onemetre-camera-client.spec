@@ -1,12 +1,12 @@
 Name:      onemetre-camera-client
-Version:   2.2.0
+Version:   2.2.1
 Release:   0
 Url:       https://github.com/warwick-one-metre/camd
 Summary:   Camera control client for the Warwick one-metre telescope.
 License:   GPL-3.0
 Group:     Unspecified
 BuildArch: noarch
-Requires:  python36, python36-Pyro4, python36-warwick-observatory-common, python36-warwick-w1m-camera
+Requires:  python3, python3-Pyro4, python3-warwick-observatory-common, python3-warwick-w1m-camera
 
 %description
 Part of the observatory software for the Warwick one-meter telescope.

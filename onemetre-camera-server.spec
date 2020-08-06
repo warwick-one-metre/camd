@@ -1,13 +1,13 @@
 Name:      onemetre-camera-server
-Version:   2.2.1
+Version:   2.2.2
 Release:   0
 Url:       https://github.com/warwick-one-metre/camd
 Summary:   Camera control server for the Warwick one-metre telescope.
 License:   GPL-3.0
 Group:     Unspecified
 BuildArch: noarch
-Requires:  python36, python36-Pyro4, python36-numpy, python36-astropy
-Requires:  python36-warwick-observatory-common, python36-warwick-w1m-camera
+Requires:  python3, python3-Pyro4, python3-numpy, python3-astropy
+Requires:  python3-warwick-observatory-common, python3-warwick-w1m-camera
 Requires:  observatory-log-client, %{?systemd_requires}
 # Required for the andor SDK to detect the cameras
 Requires: libusb-devel
